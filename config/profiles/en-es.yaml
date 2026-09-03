@@ -1,0 +1,22 @@
+# Style profile (brief §7): the decisions a human translator settles before page one.
+# Copy this file, edit it, and pass it with --profile PATH.
+name: en-es
+target_lang: es
+register: literary
+formality: tu_informal       # tú for intimates, usted for distance; set per character pair
+tense_policy: preserve
+idioms: equivalent
+measurements: preserve
+culture_notes: none
+dialogue_punctuation: target_convention
+dialogue_convention: >-
+  Spanish convention: em-dash (raya) opens dialogue and encloses the inquit —dijo ella—,
+  no closing dash at the end of the line. Do not substitute English quotation marks.
+profanity: preserve_intensity
+names: preserve
+verse: preserve_lineation
+notes:
+  - "Neutral peninsular Spanish unless the source's setting argues otherwise; avoid regional
+     slang that pins the text to one country."
+  - "Preserve the source's use of the preterite/imperfect distinction rather than smoothing it."
+  - "Opening ¡ and ¿ are mandatory."

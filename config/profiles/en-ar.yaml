@@ -1,0 +1,28 @@
+# Style profile (brief §7): the decisions a human translator settles before page one.
+# Copy this file, edit it, and pass it with --profile PATH.
+name: en-ar
+target_lang: ar
+register: literary
+formality: msa               # Modern Standard Arabic for narration
+tense_policy: preserve
+idioms: equivalent
+measurements: preserve
+culture_notes: none
+dialogue_punctuation: target_convention
+dialogue_convention: >-
+  Arabic convention: « » or " " for speech depending on house style; use Arabic comma ،
+  and Arabic question mark ؟, and mirrored brackets. Keep punctuation on the correct side
+  for RTL flow.
+profanity: preserve_intensity
+names: preserve
+verse: preserve_lineation
+notes:
+  - "Modern Standard Arabic for narration. Dialect only where the source itself is marked
+     as dialectal or heavily colloquial, and then consistently."
+  - "Diacritics (tashkil) only where a word is genuinely ambiguous or in verse; do not
+     vocalise running prose."
+  - "Text direction is RTL: renderers must set dir=rtl and page-progression-direction=rtl.
+     Never reorder the source's clause logic to suit the script direction."
+  - "Latin-script proper nouns: transliterate into Arabic script and record the rendering in
+     the glossary so it is identical on every occurrence."
+  - "Arabic expands modestly against English; do not compress."

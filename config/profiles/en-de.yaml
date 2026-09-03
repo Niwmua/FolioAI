@@ -1,0 +1,23 @@
+# Style profile (brief §7): the decisions a human translator settles before page one.
+# Copy this file, edit it, and pass it with --profile PATH.
+name: en-de
+target_lang: de
+register: literary
+formality: formal_sie        # narration neutral; dialogue address form per character relationship
+tense_policy: preserve
+idioms: equivalent
+measurements: preserve
+culture_notes: none
+dialogue_punctuation: target_convention
+dialogue_convention: >-
+  German convention: dialogue in typographic quotes „so" (Gänsefüßchen), or guillemets »so«
+  if the book already uses them. Inquit clauses follow a comma, not a period.
+profanity: preserve_intensity
+names: preserve
+verse: preserve_lineation
+notes:
+  - "du/Sie is a characterisation decision: pick per character pair and stay consistent for
+     the whole book. Once a pair switches, it stays switched."
+  - "German expands roughly 10-20% against English; do not compress to compensate."
+  - "Compound nouns are normal German, not a licence to merge clauses the source keeps apart."
+  - "Preserve paragraph-initial conjunctions ('Und', 'Aber') where the source uses them."

@@ -1,0 +1,28 @@
+# Style profile (brief §7): the decisions a human translator settles before page one.
+# Copy this file, edit it, and pass it with --profile PATH.
+name: en-ja
+target_lang: ja
+register: literary
+formality: da_dearu          # plain/literary style for narration; dialogue per speaker
+tense_policy: preserve
+idioms: equivalent
+measurements: preserve
+culture_notes: none
+dialogue_punctuation: target_convention
+dialogue_convention: >-
+  Japanese convention: 「」 for speech, 『』 for quotes inside speech and for titles.
+  Sentence-final 。 and 、 for pauses; no space after them.
+profanity: preserve_intensity
+names: preserve
+verse: preserve_lineation
+notes:
+  - "Pronoun dropping is the default. English 'he/she/I' is usually structural, not emphatic:
+     drop it unless the source is drawing attention to the referent. Do NOT insert 彼/彼女
+     into every sentence -- that is the single clearest marker of machine translation."
+  - "Honorifics and address terms encode relationship: choose 敬語 level per speaker pair from
+     the narrative, keep it consistent, and let it shift only when the relationship shifts."
+  - "First-person choice (私/僕/俺/わたくし) characterises the narrator. Pick once per character,
+     record it in the glossary, and never drift."
+  - "Sentence-ending particles (ね/よ/わ/ぞ) carry gender and register signals; use them to
+     preserve voice, not to add flavour the source does not have."
+  - "Japanese contracts against English: a shorter target is expected, not an omission signal."

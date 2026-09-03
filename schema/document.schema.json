@@ -1,0 +1,442 @@
+{
+  "$defs": {
+    "Block": {
+      "additionalProperties": false,
+      "description": "One translation unit. Blocks are never split across API calls (brief \u00a76).",
+      "properties": {
+        "chapter_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Chapter Id"
+        },
+        "footnote_refs": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Footnote Refs",
+          "type": "array"
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "heading",
+            "paragraph",
+            "blockquote",
+            "list_item",
+            "verse",
+            "dialogue",
+            "footnote",
+            "figure_caption",
+            "table",
+            "scene_break",
+            "page_break",
+            "front_matter"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "lang": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Lang"
+        },
+        "level": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Level"
+        },
+        "matter": {
+          "default": "body",
+          "enum": [
+            "cover",
+            "copyright",
+            "dedication",
+            "toc",
+            "index",
+            "colophon",
+            "body"
+          ],
+          "title": "Matter",
+          "type": "string"
+        },
+        "meta": {
+          "additionalProperties": true,
+          "title": "Meta",
+          "type": "object"
+        },
+        "source_pages": {
+          "items": {
+            "type": "integer"
+          },
+          "title": "Source Pages",
+          "type": "array"
+        },
+        "text": {
+          "title": "Text",
+          "type": "string"
+        },
+        "translate": {
+          "default": true,
+          "title": "Translate",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "text"
+      ],
+      "title": "Block",
+      "type": "object"
+    },
+    "Chapter": {
+      "additionalProperties": false,
+      "properties": {
+        "block_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Block Ids",
+          "type": "array"
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "level": {
+          "default": 1,
+          "title": "Level",
+          "type": "integer"
+        },
+        "number": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Number"
+        },
+        "start_page": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Start Page"
+        },
+        "title": {
+          "title": "Title",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "title"
+      ],
+      "title": "Chapter",
+      "type": "object"
+    },
+    "ExtractionReport": {
+      "additionalProperties": false,
+      "description": "What extraction did, so the quality report can audit it (brief \u00a715).",
+      "properties": {
+        "block_count": {
+          "default": 0,
+          "title": "Block Count",
+          "type": "integer"
+        },
+        "columns_detected": {
+          "default": 1,
+          "title": "Columns Detected",
+          "type": "integer"
+        },
+        "dehyphenations": {
+          "default": 0,
+          "title": "Dehyphenations",
+          "type": "integer"
+        },
+        "drop_caps_repaired": {
+          "default": 0,
+          "title": "Drop Caps Repaired",
+          "type": "integer"
+        },
+        "duration_s": {
+          "default": 0.0,
+          "title": "Duration S",
+          "type": "number"
+        },
+        "extractor": {
+          "title": "Extractor",
+          "type": "string"
+        },
+        "fallback_pages": {
+          "additionalProperties": {
+            "items": {
+              "type": "integer"
+            },
+            "type": "array"
+          },
+          "description": "extractor name -> pages it handled as a fallback",
+          "title": "Fallback Pages",
+          "type": "object"
+        },
+        "footnotes_extracted": {
+          "default": 0,
+          "title": "Footnotes Extracted",
+          "type": "integer"
+        },
+        "page_count": {
+          "default": 0,
+          "title": "Page Count",
+          "type": "integer"
+        },
+        "raw_line_count": {
+          "default": 0,
+          "title": "Raw Line Count",
+          "type": "integer"
+        },
+        "stripped_headers": {
+          "default": 0,
+          "title": "Stripped Headers",
+          "type": "integer"
+        },
+        "stripped_page_numbers": {
+          "default": 0,
+          "title": "Stripped Page Numbers",
+          "type": "integer"
+        },
+        "structure_source": {
+          "default": "none",
+          "enum": [
+            "outline",
+            "font-clustering",
+            "patterns",
+            "none"
+          ],
+          "title": "Structure Source",
+          "type": "string"
+        },
+        "warnings": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Warnings",
+          "type": "array"
+        }
+      },
+      "required": [
+        "extractor"
+      ],
+      "title": "ExtractionReport",
+      "type": "object"
+    },
+    "ImageRef": {
+      "additionalProperties": false,
+      "description": "A figure carried through from the source PDF.",
+      "properties": {
+        "bbox": {
+          "anyOf": [
+            {
+              "maxItems": 4,
+              "minItems": 4,
+              "prefixItems": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "number"
+                }
+              ],
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Bbox"
+        },
+        "caption_block_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Caption Block Id"
+        },
+        "height": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Height"
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "page": {
+          "title": "Page",
+          "type": "integer"
+        },
+        "path": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Relative path to the extracted image.",
+          "title": "Path"
+        },
+        "width": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Width"
+        }
+      },
+      "required": [
+        "id",
+        "page"
+      ],
+      "title": "ImageRef",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "The whole book, after extraction or after translation.",
+  "properties": {
+    "author": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Author"
+    },
+    "blocks": {
+      "items": {
+        "$ref": "#/$defs/Block"
+      },
+      "title": "Blocks",
+      "type": "array"
+    },
+    "chapters": {
+      "items": {
+        "$ref": "#/$defs/Chapter"
+      },
+      "title": "Chapters",
+      "type": "array"
+    },
+    "extraction_report": {
+      "$ref": "#/$defs/ExtractionReport"
+    },
+    "images": {
+      "items": {
+        "$ref": "#/$defs/ImageRef"
+      },
+      "title": "Images",
+      "type": "array"
+    },
+    "ir_version": {
+      "default": 1,
+      "title": "Ir Version",
+      "type": "integer"
+    },
+    "source_lang": {
+      "title": "Source Lang",
+      "type": "string"
+    },
+    "target_lang": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Target Lang"
+    },
+    "title": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Title"
+    }
+  },
+  "required": [
+    "source_lang",
+    "extraction_report"
+  ],
+  "title": "Document",
+  "type": "object"
+}

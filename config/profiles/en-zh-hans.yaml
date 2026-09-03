@@ -1,0 +1,24 @@
+# Style profile (brief §7): the decisions a human translator settles before page one.
+# Copy this file, edit it, and pass it with --profile PATH.
+name: en-zh-hans
+target_lang: zh-Hans
+register: literary
+formality: neutral
+tense_policy: preserve
+idioms: equivalent
+measurements: preserve
+culture_notes: none
+dialogue_punctuation: target_convention
+dialogue_convention: >-
+  Simplified Chinese convention: “ ” for speech, ‘ ’ nested. Full-width punctuation
+  throughout (，。：；？！), no space around it. Em-dash is ——, ellipsis is ……
+profanity: preserve_intensity
+names: preserve
+verse: preserve_lineation
+notes:
+  - "Simplified characters and mainland usage; avoid Taiwan-specific vocabulary."
+  - "Tense is carried by 了/过/着 and adverbs, not inflection: preserve the source's temporal
+     relations rather than its verb forms."
+  - "Chinese contracts substantially against English (roughly 0.6x by character count);
+     a short target is expected."
+  - "Do not add 的 chains to imitate English attributive stacking; restructure instead."

@@ -1,0 +1,17 @@
+# Style profile (brief §7): the decisions a human translator settles before page one.
+# Copy this file, edit it, and pass it with --profile PATH.
+name: generic
+target_lang: null
+register: neutral            # literary | neutral | colloquial | technical
+formality: neutral
+tense_policy: preserve       # preserve | naturalize
+idioms: equivalent           # literal | equivalent | footnote
+measurements: preserve       # preserve | convert | convert_with_original
+culture_notes: none          # none | inline | footnote
+dialogue_punctuation: target_convention
+dialogue_convention: "Use the target language's standard dialogue punctuation."
+profanity: preserve_intensity
+names: preserve              # preserve | transliterate | localize
+verse: preserve_lineation
+notes:
+  - "When the target language convention is unclear, prefer the source's structure."

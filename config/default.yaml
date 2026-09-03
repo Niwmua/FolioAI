@@ -1,0 +1,150 @@
+# folioai packaged defaults.
+#
+# Precedence: CLI flags > FOLIOAI_* env > ./folioai.yaml > ~/.folioai/config.yaml > this file.
+# Never put an API key here. Keys come from the environment or a .env only (brief §16).
+#
+# Defaults target OpenRouter (DECISIONS Q2), which is why model names are vendor-prefixed.
+# Point `llm.base_url` at any other OpenAI-compatible endpoint and adjust `models:` to match.
+
+models:
+  # §10: the evaluator should be a *different* model from the translator -- two instances of
+  # one model share blind spots. These defaults deliberately cross vendors.
+  translator: anthropic/claude-sonnet-4.5
+  evaluator: openai/gpt-4.1
+  escalation: anthropic/claude-opus-4.1
+  summarizer: openai/gpt-4.1-mini
+  glossary: openai/gpt-4.1
+  back_translator: openai/gpt-4.1-mini
+  vision: openai/gpt-4.1
+
+llm:
+  base_url: https://openrouter.ai/api/v1
+  timeout_s: 180.0
+  connect_timeout_s: 15.0
+  max_transient_retries: 5      # network/5xx/429 retries; separate from retry.max_attempts (D-31)
+  backoff_initial_s: 1.0
+  backoff_max_s: 60.0
+  backoff_jitter: 0.25
+  rpm: 60
+  tpm: 120000
+  cache_enabled: true
+  seed: 7
+
+translation:
+  batch_tokens: 1200
+  concurrency: 4
+  temperature: 0.2
+  top_p: 1.0
+  max_completion_ratio: 3.0
+
+context:
+  previous_target_blocks: 2
+  next_source_blocks: 1
+  summary_every: 8
+  summary_max_words: 150
+
+evaluation:
+  mode: direct                  # direct | back-translation | both
+  sample: 1.0
+  min_score: 80
+  completeness_floor: 70        # hard fail below this regardless of composite (§10)
+  temperature: 0.0
+  batch_tokens: 2400
+  both_mode_band: [80, 90]
+  show_validation_warnings: true
+  weights:
+    completeness: 0.35
+    accuracy: 0.30
+    terminology: 0.15
+    fluency: 0.15
+    formatting: 0.05
+
+retry:
+  max_attempts: 3
+  attempt_temperatures: [0.2, 0.3, 0.0]
+  breaker_failure_rate: 0.25
+  breaker_min_failures: 8       # PLAN §2.5: a floor, so short chapters do not trip the breaker
+
+probe:
+  sample_pages: 3
+  sample_skip_front_fraction: 0.1
+  garbling_replacement_ratio: 0.02
+  garbling_control_ratio: 0.02
+  garbling_nonword_ratio: 0.35
+  min_chars_for_text_layer: 200
+  column_gap_fraction: 0.05
+  column_min_share: 0.25
+
+cleaning:
+  strip_running_heads: true
+  strip_page_numbers: true
+  dehyphenate: true
+  reflow_paragraphs: true
+  normalize_unicode: true
+  repair_drop_caps: true
+  extract_footnotes: true
+  classify_matter: true
+  header_page_fraction: 0.25
+  header_similarity: 0.9
+  furniture_margin_fraction: 0.12   # only lines in the page margin can be furniture
+  paragraph_gap_multiple: 1.6
+  drop_cap_size_ratio: 1.8
+  footnote_size_ratio: 0.85
+
+extraction:
+  extractor: auto
+  ocr_lang: null
+  vision_fallback: false
+  vision_max_pages: 10
+  translate_front_matter: true
+  regenerate_toc: true
+  min_heading_size_ratio: 1.15
+
+export:
+  formats: [md]
+  layout: target-only
+  split_chapters: false
+  pdf_engine: auto
+
+budget:
+  max_cost_usd: null
+  expected_retry_rate: 0.15
+
+logging:
+  level: INFO
+  tty: true
+
+# USD per 1,000,000 tokens. Provider prices move constantly, which is exactly why these live
+# in config and not in code (§13). Verified against OpenRouter list prices; re-check before
+# trusting an estimate. An unknown model is costed as zero with a warning, never a crash.
+pricing:
+  anthropic/claude-sonnet-4.5:
+    prompt: 3.00
+    completion: 15.00
+  anthropic/claude-opus-4.1:
+    prompt: 15.00
+    completion: 75.00
+  anthropic/claude-haiku-4.5:
+    prompt: 1.00
+    completion: 5.00
+  openai/gpt-4.1:
+    prompt: 2.00
+    completion: 8.00
+  openai/gpt-4.1-mini:
+    prompt: 0.40
+    completion: 1.60
+  openai/gpt-4o-mini:
+    prompt: 0.15
+    completion: 0.60
+  google/gemini-2.5-flash:
+    prompt: 0.30
+    completion: 2.50
+  google/gemini-2.5-pro:
+    prompt: 1.25
+    completion: 10.00
+  deepseek/deepseek-chat:
+    prompt: 0.28
+    completion: 0.88
+  meta-llama/llama-3.3-70b-instruct:
+    prompt: 0.12
+    completion: 0.30

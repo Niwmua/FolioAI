@@ -1,0 +1,22 @@
+# Style profile (brief §7): the decisions a human translator settles before page one.
+# Copy this file, edit it, and pass it with --profile PATH.
+name: en-fr
+target_lang: fr
+register: literary
+formality: vouvoiement       # tutoiement per character relationship
+tense_policy: preserve
+idioms: equivalent
+measurements: preserve
+culture_notes: none
+dialogue_punctuation: target_convention
+dialogue_convention: >-
+  French convention: guillemets « » open and close a dialogue exchange, with em-dashes
+  marking each new speaker inside it. Narrow no-break spaces inside the guillemets.
+profanity: preserve_intensity
+names: preserve
+verse: preserve_lineation
+notes:
+  - "tu/vous is a characterisation decision; fix it per pair and keep it stable."
+  - "Passé simple for literary narration where the source is in a narrative past, unless the
+     source's register is deliberately colloquial."
+  - "Non-breaking space before ; : ! ? and inside guillemets."
