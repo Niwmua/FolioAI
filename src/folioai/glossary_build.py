@@ -219,7 +219,7 @@ async def build_glossary(
                     {"role": "system", "content": system},
                     {"role": "user", "content": passage},
                 ],
-                model=settings.models.glossary,
+                model=settings.models.role("glossary"),
                 temperature=0.0,
                 response_format={"type": "json_schema", "json_schema": CANDIDATE_SCHEMA},
                 purpose="glossary",

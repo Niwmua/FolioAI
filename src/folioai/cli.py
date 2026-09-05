@@ -290,6 +290,173 @@ def status(
 # --------------------------------------------------------------------------------
 
 
+MODEL_ROLES = (
+    ("translator", "every first attempt"),
+    ("evaluator", "the judge"),
+    ("escalation", "attempt 3 of the retry ladder"),
+    ("summarizer", "the rolling chapter summary"),
+    ("glossary", "term extraction"),
+    ("back_translator", "--eval-mode back-translation / both"),
+    ("vision", "--vision-fallback page transcription"),
+)
+
+
+def _fetch_available_models(settings: Settings) -> set[str] | None:
+    """Ask the endpoint which models it has. Returns None if it will not say.
+
+    ``GET /models`` is free on every OpenAI-compatible endpoint, which makes it the cheapest
+    possible answer to "will this run actually work" -- far better than finding out on
+    attempt 3 of chapter 19 that the escalation model does not exist there.
+    """
+    import httpx
+
+    if not settings.api_key:
+        return None
+    url = settings.llm.base_url.rstrip("/") + "/models"
+    try:
+        response = httpx.get(
+            url,
+            headers={"Authorization": f"Bearer {settings.api_key}"},
+            timeout=settings.llm.connect_timeout_s,
+        )
+        response.raise_for_status()
+        payload = response.json()
+    except Exception as exc:
+        get_logger().warning("model_listing_failed", url=url, error=str(exc)[:200])
+        return None
+
+    entries = payload.get("data", payload) if isinstance(payload, dict) else payload
+    if not isinstance(entries, list):
+        return None
+    names: set[str] = set()
+    for entry in entries:
+        if isinstance(entry, dict) and entry.get("id"):
+            names.add(str(entry["id"]))
+        elif isinstance(entry, str):
+            names.add(entry)
+    return names or None
+
+
+@app.command("config")
+@handle_errors
+def config_command(
+    check: Annotated[
+        bool,
+        typer.Option("--check", help="Ask the endpoint whether these models exist."),
+    ] = False,
+) -> None:
+    """Show the settings in effect and which source set each one."""
+    from rich import box
+    from rich.table import Table
+
+    from .env import dotenv_paths
+
+    settings = _settings()
+
+    console().print("[heading]endpoint[/heading]")
+    console().print(f"  base_url  {settings.llm.base_url}")
+    console().print(f"            [muted]{settings.origin('llm.base_url')}[/muted]")
+    if settings.api_key:
+        # Never the value, and never enough of it to be useful if this is pasted anywhere.
+        console().print(
+            f"  api key   [good]set[/good]  "
+            f"[muted]({len(settings.api_key)} chars, ends {settings.api_key[-4:]})[/muted]"
+        )
+    else:
+        console().print(
+            "  api key   [bad]missing[/bad]  [muted]set FOLIOAI_API_KEY in config/.env[/muted]"
+        )
+
+    available = _fetch_available_models(settings) if check else None
+    if check and available is None:
+        console().print(
+            "\n[warn]could not list models from the endpoint[/warn] "
+            "[muted](it may not support GET /models; this is not an error)[/muted]"
+        )
+
+    table = Table(
+        box=box.SIMPLE_HEAD, pad_edge=False, padding=(0, 1), title="models", title_style="heading"
+    )
+    table.add_column("role", no_wrap=True)
+    table.add_column("model", no_wrap=True, overflow="ellipsis", max_width=30)
+    table.add_column("from", no_wrap=True)
+    if available is not None:
+        table.add_column("exists", no_wrap=True)
+
+    for role, _purpose in MODEL_ROLES:
+        model = settings.models.role(role)
+        if role in settings.models.inherited:
+            origin = "[muted]= translator[/muted]"
+        else:
+            source = settings.origin(f"models.{role}")
+            origin = (
+                "[good].env[/good]"
+                if ".env" in source
+                else f"[muted]{source.split(' (')[0]}[/muted]"
+            )
+        row = [role, model, origin]
+        if available is not None:
+            row.append("[good]yes[/good]" if model in available else "[bad]NO[/bad]")
+        table.add_row(*row)
+    console().print()
+    console().print(table)
+    console().print(
+        "[muted]" + " · ".join(f"{role}: {purpose}" for role, purpose in MODEL_ROLES) + "[/muted]"
+    )
+
+    if available is not None:
+        missing = sorted({settings.models.role(role) for role, _ in MODEL_ROLES} - available)
+        if missing:
+            console().print(
+                f"[bad]{len(missing)} model(s) are not available on this endpoint:[/bad] "
+                + ", ".join(missing)
+            )
+            console().print(
+                "[muted]Set them in config/.env, e.g. FOLIOAI_ESCALATION_MODEL=...[/muted]"
+            )
+        else:
+            console().print("[good]every configured model exists on this endpoint[/good]")
+
+    settings_table = Table(
+        box=box.SIMPLE_HEAD,
+        pad_edge=False,
+        padding=(0, 1),
+        title="behaviour",
+        title_style="heading",
+    )
+    settings_table.add_column("setting", no_wrap=True)
+    settings_table.add_column("value", justify="right", no_wrap=True)
+    settings_table.add_column("from", no_wrap=True)
+    for dotted, value in (
+        ("translation.batch_tokens", settings.translation.batch_tokens),
+        ("translation.concurrency", settings.translation.concurrency),
+        ("evaluation.min_score", settings.evaluation.min_score),
+        ("evaluation.mode", settings.evaluation.mode),
+        ("evaluation.sample", settings.evaluation.sample),
+        ("retry.max_attempts", settings.retry.max_attempts),
+        ("llm.rpm", settings.llm.rpm),
+        ("llm.tpm", settings.llm.tpm),
+        ("budget.max_cost_usd", settings.budget.max_cost_usd or "none"),
+        ("logging.level", settings.logging.level),
+    ):
+        source = settings.origin(dotted)
+        mark = (
+            "[good].env[/good]" if ".env" in source else f"[muted]{source.split(' (')[0]}[/muted]"
+        )
+        settings_table.add_row(dotted, str(value), mark)
+    console().print()
+    console().print(settings_table)
+
+    console().print("\n[heading].env files[/heading]")
+    for path in dotenv_paths():
+        mark = "[good]read[/good]" if path.is_file() else "[muted]absent[/muted]"
+        console().print(f"  {mark}  {path}")
+    console().print(
+        "\n[muted]Anything marked '.env' came from those files or your shell. "
+        "Run 'folioai paths' for file locations.[/muted]"
+    )
+
+
 # Named explicitly: the function cannot be called `paths` without shadowing the module of
 # that name, and Typer would otherwise expose it as "paths-command".
 @app.command("paths")

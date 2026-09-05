@@ -464,7 +464,7 @@ class BackTranslator:
         body = render_segments(translations.items())
         response = await self.client.complete(
             [{"role": "system", "content": system}, {"role": "user", "content": body}],
-            model=self.settings.models.back_translator,
+            model=self.settings.models.role("back_translator"),
             temperature=0.0,
             purpose="back-translate",
         )

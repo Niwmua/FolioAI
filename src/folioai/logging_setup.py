@@ -38,13 +38,21 @@ _err_console: Console | None = None
 _configured = False
 
 # Anything that looks like a key, plus the values of fields whose *name* implies a secret.
+#
+# The JWT pattern is not hypothetical: gateways that front several providers commonly
+# issue a JWT rather than an sk- string, and a redactor that only knows OpenAI's format
+# would have let one straight into the logs.
 _SECRET_VALUE_RE = re.compile(
     r"""(?xi)
-    \b(
-        sk-[A-Za-z0-9_\-]{16,}          # openai / openrouter style
-      | sk-or-v1-[A-Za-z0-9_\-]{16,}
-      | Bearer\s+[A-Za-z0-9._\-]{16,}
-    )\b
+    (
+        \bsk-or-v1-[A-Za-z0-9_-]{16,}    # openrouter
+      | \bsk-[A-Za-z0-9_-]{16,}          # openai, and the many endpoints that copy it
+      | \bBearer\s+[A-Za-z0-9._-]{16,}
+      | \beyJ[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{6,}   # a JWT
+      | \bgsk_[A-Za-z0-9]{16,}           # groq
+      | \bAIza[A-Za-z0-9_-]{20,}         # google
+      | \bhf_[A-Za-z0-9]{16,}            # hugging face
+    )
     """
 )
 # Anchored on purpose. A loose match on "token" redacted `prompt_tokens`, `source_tokens`

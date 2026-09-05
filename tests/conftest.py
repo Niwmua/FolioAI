@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -12,6 +13,44 @@ sys.path.insert(0, str(Path(__file__).resolve().parent / "fixtures"))
 from make_pdfs import build_all
 
 from folioai.config import Settings, packaged_settings
+
+
+@pytest.fixture(scope="session", autouse=True)
+def hermetic_config(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Path]:
+    """Run every test against a copy of the shipped config, never the developer's own.
+
+    Once ``.env`` became authoritative for models, endpoints and paths, the suite started
+    reading whatever the person running it happened to have configured -- so a test asserting
+    the shipped default model would pass on one machine and fail on the next. Tests get a
+    copy of ``config/`` with no ``.env`` in it, and no ``FOLIOAI_*`` variables set.
+
+    Tests that need their own values set them with monkeypatch as usual; this only removes
+    the ambient ones.
+    """
+    import os
+    import shutil
+
+    from folioai import env as env_module
+
+    source = Path(__file__).resolve().parent.parent / "config"
+    target = tmp_path_factory.mktemp("packaged-config")
+    shutil.copy(source / "default.yaml", target / "default.yaml")
+    if (source / "profiles").is_dir():
+        shutil.copytree(source / "profiles", target / "profiles")
+
+    saved = {k: v for k, v in os.environ.items() if k.startswith("FOLIOAI_")}
+    for name in saved:
+        os.environ.pop(name, None)
+    os.environ["FOLIOAI_CONFIG_DIR"] = str(target)
+    env_module.reset_for_tests()
+
+    try:
+        yield target
+    finally:
+        for name in [k for k in os.environ if k.startswith("FOLIOAI_")]:
+            os.environ.pop(name, None)
+        os.environ.update(saved)
+        env_module.reset_for_tests()
 
 
 @pytest.fixture(scope="session")

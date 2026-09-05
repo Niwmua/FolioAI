@@ -222,7 +222,7 @@ def estimate_document(
             estimate.phases.append(
                 _phase(
                     "back-translation",
-                    settings.models.back_translator,
+                    settings.models.role("back_translator"),
                     calls=max(1, int(eval_batches * share)),
                     prompt_tokens=int(translate_high * share),
                     completion_low=int(source_tokens * share * 0.8),

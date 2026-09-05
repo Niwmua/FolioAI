@@ -8,14 +8,32 @@
 
 models:
   # §10: the evaluator should be a *different* model from the translator -- two instances of
-  # one model share blind spots. These defaults deliberately cross vendors.
+  # one model share blind spots. These two defaults deliberately cross vendors.
+  #
+  # Set them in config/.env (FOLIOAI_TRANSLATOR_MODEL, FOLIOAI_EVALUATOR_MODEL) for your own
+  # endpoint. The names below are OpenRouter's and will not exist on every gateway.
   translator: anthropic/claude-sonnet-4.5
   evaluator: openai/gpt-4.1
-  escalation: anthropic/claude-opus-4.1
-  summarizer: openai/gpt-4.1-mini
-  glossary: openai/gpt-4.1
-  back_translator: openai/gpt-4.1-mini
-  vision: openai/gpt-4.1
+
+  # Every other role is left unset on purpose, and inherits the translator.
+  #
+  # Naming a vendor here would mean someone who configured two models for their own gateway
+  # got a system that translates and evaluates correctly and then, on attempt 3 of the retry
+  # ladder or the first rolling summary, calls a model their endpoint has never heard of --
+  # halfway through a book. Inheriting a model the user has actually named is always safer
+  # than guessing at one they have not.
+  #
+  # Override any of them individually when a cheaper or more capable model is right:
+  #   escalation:      the stronger model attempt 3 escalates to
+  #   summarizer:      the cheap model that maintains the rolling chapter summary
+  #   glossary:        term extraction
+  #   back_translator: the blind back-translation in --eval-mode both
+  #   vision:          page transcription for --vision-fallback
+  # escalation: null
+  # summarizer: null
+  # glossary: null
+  # back_translator: null
+  # vision: null
 
 llm:
   base_url: https://openrouter.ai/api/v1

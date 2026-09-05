@@ -29,8 +29,12 @@ def clean_env() -> None:
     Without this, a variable loaded from a fixture ``.env`` leaks into every later test in
     the session -- which is exactly how these tests first went wrong.
     """
-    saved = {name: os.environ.get(name) for name in env_module.PATH_VARIABLES}
-    for name in env_module.PATH_VARIABLES:
+    # FOLIOAI_CONFIG_DIR is left alone: the session fixture points it at a copy of the
+    # shipped config with no .env in it, and clearing it here would send these tests back
+    # to reading the developer's real one.
+    managed = [n for n in env_module.PATH_VARIABLES if n != "FOLIOAI_CONFIG_DIR"]
+    saved = {name: os.environ.get(name) for name in managed}
+    for name in managed:
         os.environ.pop(name, None)
     reset_for_tests()
     try:

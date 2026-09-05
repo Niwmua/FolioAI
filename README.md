@@ -291,7 +291,47 @@ way you would expect. Every location is overridable:
 | `FOLIOAI_USER_CONFIG` | `$HOME/config.yaml` | Your own settings |
 | `FOLIOAI_CONFIG_DIR` | packaged `config/` | `default.yaml`, `profiles/`, `.env` |
 
-To see what any of that resolves to right now:
+### Models
+
+There are seven model roles. Only `translator` and `evaluator` have shipped defaults; the
+other five **inherit the translator** unless you name them, so configuring two models gives
+you a system where every call goes to a model your endpoint actually has.
+
+```ini
+FOLIOAI_TRANSLATOR_MODEL=google/gemini-3.6-flash
+FOLIOAI_EVALUATOR_MODEL=deepseek/deepseek-v4-flash
+# FOLIOAI_ESCALATION_MODEL=       # attempt 3 of the retry ladder
+# FOLIOAI_SUMMARIZER_MODEL=       # the rolling chapter summary
+# FOLIOAI_GLOSSARY_MODEL=         # term extraction
+# FOLIOAI_BACK_TRANSLATOR_MODEL=  # --eval-mode back-translation / both
+# FOLIOAI_VISION_MODEL=           # --vision-fallback page transcription
+```
+
+That inheritance is not a convenience. Naming a vendor's model as the default for a
+secondary role means someone who configured two models for their own gateway gets a system
+that translates and evaluates correctly and then, on attempt 3 of the retry ladder, calls a
+model the endpoint has never heard of — halfway through a book, after the money is spent.
+
+### Checking what is actually in effect
+
+```bash
+uv run folioai config           # every model and setting, and which source set it
+uv run folioai config --check   # ...and whether your endpoint really has those models
+uv run folioai paths            # file locations, and which .env files were read
+```
+
+```
+ role              model                        from           exists
+ ────────────────────────────────────────────────────────────────────
+ translator        google/gemini-3.6-flash      .env           yes
+ evaluator         deepseek/deepseek-v4-flash   .env           yes
+ escalation        google/gemini-3.6-flash      = translator   yes
+```
+
+`--check` calls `GET /models` on your endpoint, which is free, and is the cheapest possible
+answer to "will this run actually work".
+
+To see where any path resolves to:
 
 ```bash
 uv run folioai paths

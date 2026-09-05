@@ -258,7 +258,7 @@ class SummaryTracker:
                     {"role": "system", "content": system},
                     {"role": "user", "content": "\n\n".join(recent_source)},
                 ],
-                model=self.settings.models.summarizer,
+                model=self.settings.models.role("summarizer"),
                 temperature=0.0,
                 max_tokens=self.settings.context.summary_max_words * 3,
                 purpose="summarize",

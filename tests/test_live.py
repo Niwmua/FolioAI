@@ -78,9 +78,7 @@ async def test_a_real_endpoint_honours_the_tag_protocol(live_settings: Settings)
     client = OpenAICompatibleClient(live_settings)
     try:
         batch = segment_document(document, live_settings)[0]
-        translator = Translator(
-            client, live_settings, document=document, target_lang="German"
-        )
+        translator = Translator(client, live_settings, document=document, target_lang="German")
         result = await translator.translate_batch(batch, BatchContext())
     finally:
         await client.aclose()
@@ -107,9 +105,7 @@ async def test_deterministic_validation_passes_a_real_translation(
     client = OpenAICompatibleClient(live_settings)
     try:
         batch = segment_document(document, live_settings)[0]
-        translator = Translator(
-            client, live_settings, document=document, target_lang="German"
-        )
+        translator = Translator(client, live_settings, document=document, target_lang="German")
         result = await translator.translate_batch(batch, BatchContext())
     finally:
         await client.aclose()
@@ -128,14 +124,10 @@ async def test_a_real_evaluator_returns_the_structured_schema(
     client = OpenAICompatibleClient(live_settings)
     try:
         batch = segment_document(document, live_settings)[0]
-        translator = Translator(
-            client, live_settings, document=document, target_lang="German"
-        )
+        translator = Translator(client, live_settings, document=document, target_lang="German")
         result = await translator.translate_batch(batch, BatchContext())
 
-        evaluator = Evaluator(
-            client, live_settings, source_lang="English", target_lang="German"
-        )
+        evaluator = Evaluator(client, live_settings, source_lang="English", target_lang="German")
         evaluation = await evaluator.evaluate(result)
     finally:
         await client.aclose()
@@ -144,10 +136,7 @@ async def test_a_real_evaluator_returns_the_structured_schema(
     for segment_id, verdict in evaluation.verdicts.items():
         assert verdict.score is not None, f"{segment_id} came back unscored"
         assert 0 <= verdict.composite <= 100
-    print(
-        f"\nmean composite: {evaluation.mean_composite} "
-        f"via {evaluation.structured_output}"
-    )
+    print(f"\nmean composite: {evaluation.mean_composite} via {evaluation.structured_output}")
 
 
 async def test_the_cache_makes_the_second_identical_call_free(
@@ -158,9 +147,7 @@ async def test_the_cache_makes_the_second_identical_call_free(
     client = OpenAICompatibleClient(live_settings)
     try:
         batch = segment_document(document, live_settings)[0]
-        translator = Translator(
-            client, live_settings, document=document, target_lang="German"
-        )
+        translator = Translator(client, live_settings, document=document, target_lang="German")
         first = await translator.translate_batch(batch, BatchContext())
         second = await translator.translate_batch(batch, BatchContext())
     finally:

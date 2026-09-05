@@ -126,7 +126,7 @@ async def transcribe_pages(
                         ],
                     }
                 ],
-                model=settings.models.vision,
+                model=settings.models.role("vision"),
                 temperature=0.0,
                 purpose="vision-transcribe",
             )

@@ -479,7 +479,7 @@ class Orchestrator:
     def _model_for(self, attempt_no: int) -> str:
         """Attempt 3 escalates to a stronger model (§11)."""
         if attempt_no >= self.settings.retry.max_attempts:
-            return self.settings.models.escalation
+            return self.settings.models.role("escalation")
         return self.settings.models.translator
 
     def _build_retry_context(

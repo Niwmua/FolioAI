@@ -58,13 +58,46 @@ class _Model(BaseModel):
 
 
 class ModelsConfig(_Model):
+    """Which model plays each role.
+
+    Only ``translator`` and ``evaluator`` have shipped defaults. Every other role is
+    ``None`` until set, and then **inherits the translator**.
+
+    That inheritance is the important part. Naming a vendor's model as the default for
+    five secondary roles means a user who configures two models against their own gateway
+    gets three-quarters of a working system: translation and evaluation succeed, and then
+    attempt 3 of the retry ladder and the rolling summary call a model the endpoint has
+    never heard of, halfway through a book. Inheriting a model the user has actually named
+    is always safer than guessing at one they have not.
+    """
+
     translator: str = "anthropic/claude-sonnet-4.5"
     evaluator: str = "openai/gpt-4.1"
-    escalation: str = "anthropic/claude-opus-4.1"
-    summarizer: str = "openai/gpt-4.1-mini"
-    glossary: str = "openai/gpt-4.1"
-    back_translator: str = "openai/gpt-4.1-mini"
-    vision: str = "openai/gpt-4.1"
+    escalation: str | None = None
+    summarizer: str | None = None
+    glossary: str | None = None
+    back_translator: str | None = None
+    vision: str | None = None
+
+    #: Roles that fell back to the translator, for the provenance display.
+    inherited: tuple[str, ...] = ()
+
+    @model_validator(mode="after")
+    def _inherit_unset_roles(self) -> ModelsConfig:
+        inherited: list[str] = []
+        for role in ("escalation", "summarizer", "glossary", "back_translator", "vision"):
+            if getattr(self, role) is None:
+                object.__setattr__(self, role, self.translator)
+                inherited.append(role)
+        object.__setattr__(self, "inherited", tuple(inherited))
+        return self
+
+    def role(self, name: str) -> str:
+        """The model for a role, guaranteed to be a string after validation."""
+        value = getattr(self, name)
+        if not value:  # pragma: no cover - the validator fills every role
+            return self.translator
+        return str(value)
 
 
 class LLMConfig(_Model):
@@ -260,7 +293,28 @@ class Settings(_Model):
     def source_description(self) -> str:
         return ", ".join(self._sources) if self._sources else "packaged defaults"
 
+    def origin(self, dotted: str) -> str:
+        """Which source last set a setting, e.g. ``models.translator``.
+
+        The answer to "is it really using my .env?" should be checkable rather than
+        promised, which is what this and ``folioai config`` are for.
+        """
+        return self._provenance.get(dotted, "built-in default")
+
     _sources: list[str] = []
+    _provenance: dict[str, str] = {}
+
+
+def flatten_keys(data: dict[str, Any], prefix: str = "") -> dict[str, Any]:
+    """Flatten a nested config dict to ``section.key`` form, for provenance tracking."""
+    flat: dict[str, Any] = {}
+    for key, value in data.items():
+        dotted = f"{prefix}{key}"
+        if isinstance(value, dict):
+            flat.update(flatten_keys(value, f"{dotted}."))
+        else:
+            flat[dotted] = value
+    return flat
 
 
 def _deep_merge(base: dict[str, Any], overlay: dict[str, Any]) -> dict[str, Any]:
@@ -296,6 +350,9 @@ def _load_yaml(path: Path) -> dict[str, Any]:
     return raw
 
 
+#: Short names for the settings people actually set, so a .env does not have to be written
+#: in FOLIOAI_SECTION__KEY form. Every model role has one: a role without an alias is a role
+#: that quietly keeps its default when someone thinks they have configured everything.
 _FLAT_ENV_ALIASES: dict[str, tuple[str, ...]] = {
     "API_KEY": ("api_key",),
     "BASE_URL": ("llm", "base_url"),
@@ -303,8 +360,20 @@ _FLAT_ENV_ALIASES: dict[str, tuple[str, ...]] = {
     "TRANSLATOR_MODEL": ("models", "translator"),
     "EVALUATOR_MODEL": ("models", "evaluator"),
     "ESCALATION_MODEL": ("models", "escalation"),
+    "SUMMARIZER_MODEL": ("models", "summarizer"),
+    "GLOSSARY_MODEL": ("models", "glossary"),
+    "BACK_TRANSLATOR_MODEL": ("models", "back_translator"),
+    "VISION_MODEL": ("models", "vision"),
     "MAX_COST": ("budget", "max_cost_usd"),
     "CONCURRENCY": ("translation", "concurrency"),
+    "TIMEOUT": ("llm", "timeout_s"),
+    "RPM": ("llm", "rpm"),
+    "TPM": ("llm", "tpm"),
+    "MIN_SCORE": ("evaluation", "min_score"),
+    "EVAL_MODE": ("evaluation", "mode"),
+    "EVAL_SAMPLE": ("evaluation", "sample"),
+    "BATCH_TOKENS": ("translation", "batch_tokens"),
+    "MAX_ATTEMPTS": ("retry", "max_attempts"),
 }
 
 # Env keys that name a location rather than a setting.
@@ -395,18 +464,28 @@ def load_settings(
     load_env(project_dir)
 
     merged: dict[str, Any] = {}
+    provenance: dict[str, str] = {}
+
+    def apply(overlay: dict[str, Any], label: str) -> None:
+        """Merge one source and record which keys it set."""
+        nonlocal merged
+        if not overlay:
+            return
+        merged = _deep_merge(merged, overlay)
+        for dotted in flatten_keys(overlay):
+            provenance[dotted] = label
+        sources.append(label)
+
     defaults = _packaged_defaults()
     if defaults.is_file():
-        merged = _load_yaml(defaults)
-        sources.append("packaged defaults")
+        apply(_load_yaml(defaults), f"packaged defaults ({defaults.name})")
 
     for candidate, label in (
         (user_config_path(), "user config"),
         (project_dir / "folioai.yaml", "project config"),
     ):
         if candidate.is_file():
-            merged = _deep_merge(merged, _load_yaml(candidate))
-            sources.append(f"{label} ({candidate})")
+            apply(_load_yaml(candidate), f"{label} ({candidate})")
 
     if extra_config is not None:
         if not extra_config.is_file():
@@ -414,17 +493,14 @@ def load_settings(
                 f"Config file not found: {extra_config}",
                 remedy="Check the path passed to --config.",
             )
-        merged = _deep_merge(merged, _load_yaml(extra_config))
-        sources.append(f"--config ({extra_config})")
+        apply(_load_yaml(extra_config), f"--config ({extra_config})")
 
-    env_overlay = config_from_env(environ)
-    if env_overlay:
-        merged = _deep_merge(merged, env_overlay)
-        sources.append(f"{ENV_PREFIX}* environment")
+    # The .env files were already loaded into the environment by load_env() above, so this
+    # single layer covers both them and anything exported in the shell. Which of the two it
+    # was is reported separately by `folioai config`, from the files themselves.
+    apply(config_from_env(environ), f"{ENV_PREFIX}* environment / .env")
 
-    if cli_overrides:
-        merged = _deep_merge(merged, cli_overrides)
-        sources.append("command line")
+    apply(cli_overrides or {}, "command line")
 
     # Keys never accepted from a file (§16).
     merged.pop("api_key", None)
@@ -443,6 +519,7 @@ def load_settings(
 
     settings.api_key = _api_key_from_env(environ)
     settings._sources = sources
+    settings._provenance = provenance
     return settings
 
 
