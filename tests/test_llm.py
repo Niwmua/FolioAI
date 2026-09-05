@@ -15,7 +15,15 @@ import pytest
 from folioai.config import Settings
 from folioai.errors import BudgetExceeded, LLMError, RateLimitError
 from folioai.llm.cache import PromptCache, fingerprint
-from folioai.llm.client import BudgetGuard, LLMResponse, _map_exception
+from folioai.llm.client import (
+    BudgetGuard,
+    LLMResponse,
+    _map_exception,
+    _reasoning_tokens,
+    _reported_cost,
+    _warn_once,
+)
+from folioai.llm.client import reset_warnings as reset_reasoning_warnings
 from folioai.llm.fake import (
     FakeLLMClient,
     degenerate_translator,
@@ -347,3 +355,71 @@ async def test_scripted_by_id_translates_only_what_it_is_given() -> None:
     parsed = parse_segments(response.text)
     assert parsed.texts["b0001"] == "Erster."
     assert parsed.texts["b0002"] == "Second."
+
+
+# -- reasoning tokens and endpoint-reported cost --------------------------------------
+#
+# A reasoning model charges its thinking against max_tokens and shows none of it in the
+# response. Reading these two fields is what turns "the model stopped talking" into a
+# diagnosis, and what stops a run reporting $0.00 for a model the price table lacks.
+
+
+class _Details:
+    def __init__(self, reasoning_tokens: Any) -> None:
+        self.reasoning_tokens = reasoning_tokens
+
+
+class _Usage:
+    """A usage object shaped like the SDK's, with gateway extras where they really land."""
+
+    def __init__(self, **fields: Any) -> None:
+        self.prompt_tokens = fields.pop("prompt_tokens", 10)
+        self.completion_tokens = fields.pop("completion_tokens", 20)
+        self.completion_tokens_details = fields.pop("completion_tokens_details", None)
+        self.model_extra = fields
+
+
+def test_reasoning_tokens_are_read_from_the_usage_details() -> None:
+    usage = _Usage(completion_tokens_details=_Details(750))
+    assert _reasoning_tokens(usage) == 750
+
+
+def test_reasoning_tokens_default_to_zero_when_absent() -> None:
+    """Most endpoints report nothing here, and that must not be an error."""
+    assert _reasoning_tokens(_Usage()) == 0
+    assert _reasoning_tokens(None) == 0
+    assert _reasoning_tokens(_Usage(completion_tokens_details=_Details(None))) == 0
+    assert _reasoning_tokens(_Usage(completion_tokens_details=_Details("nonsense"))) == 0
+
+
+def test_reasoning_tokens_read_a_dict_shaped_usage() -> None:
+    usage = {"completion_tokens_details": {"reasoning_tokens": 482}}
+    assert _reasoning_tokens(usage) == 482
+
+
+def test_reported_cost_is_read_from_the_gateway_extra() -> None:
+    assert _reported_cost(_Usage(cost=0.00298425)) == pytest.approx(0.00298425)
+
+
+def test_no_reported_cost_is_none_not_zero() -> None:
+    """None means 'fall back to the table'; 0.0 would mean 'this call was free'."""
+    assert _reported_cost(_Usage()) is None
+    assert _reported_cost(None) is None
+    assert _reported_cost(_Usage(cost="free")) is None
+    assert _reported_cost(_Usage(cost=-1.0)) is None
+
+
+def test_a_genuinely_free_call_is_kept_as_zero() -> None:
+    assert _reported_cost(_Usage(cost=0.0)) == 0.0
+
+
+def test_the_reasoning_warning_fires_once_per_model() -> None:
+    """The warning is the diagnosis; repeating it every batch is how it gets ignored."""
+    reset_reasoning_warnings()
+    seen: set[str] = set()
+
+    _warn_once(seen, "some/thinking-model", "reasoning_budget_exhausted")
+    _warn_once(seen, "some/thinking-model", "reasoning_budget_exhausted")
+    _warn_once(seen, "another/thinking-model", "reasoning_budget_exhausted")
+
+    assert seen == {"some/thinking-model", "another/thinking-model"}

@@ -8,6 +8,10 @@ Per segment, the ladder is:
 | 2       | ``models.translator``  | 0.3 | + previous attempt + evaluator issues           |
 | 3       | ``models.escalation``  | 0.0 | + all prior attempts and all prior feedback     |
 
+Every rung of that ladder addresses a model that answered *badly*. A model that stopped for
+length never got as far as answering, so a truncated attempt also doubles the next one's
+token budget (D-142) -- otherwise the retry reproduces the truncation exactly.
+
 After the final attempt the **highest-scoring attempt is kept**, the segment is marked
 ``needs_review``, and every attempt stays in the database. Content is never dropped and the
 output never has a gap -- a bad translation that is flagged is recoverable; a missing
@@ -66,6 +70,9 @@ class Attempt:
     text: str
     verdict: SegmentVerdict | None = None
     validation: list[str] = field(default_factory=list)
+    #: The check *names* behind ``validation``, whose entries are human-readable prose.
+    #: Deciding what to do about a failure means matching on the check, not on its wording.
+    checks: list[str] = field(default_factory=list)
     attempt_row_id: int | None = None
 
     @property
@@ -283,12 +290,23 @@ class Orchestrator:
         retry_context: RetryContext | None = None
         pending_ids = list(batch.ids)
         max_attempts = self.settings.retry.max_attempts
+        # Each attempt that stopped for length doubles the next one's token budget. Without
+        # this the ladder retries a truncation against the identical ceiling and gets the
+        # identical cut-off response three times over.
+        widen = 0
 
         for attempt_no in range(1, max_attempts + 1):
             model = self._model_for(attempt_no)
             result = await self.translator.translate_batch(
-                batch, context, attempt_no=attempt_no, model=model, retry=retry_context
+                batch,
+                context,
+                attempt_no=attempt_no,
+                model=model,
+                retry=retry_context,
+                widen=widen,
             )
+            if result.response.truncated:
+                widen += 1
             validation = validate_batch(
                 result,
                 self.settings,
@@ -331,6 +349,10 @@ class Orchestrator:
                 next_attempt=attempt_no + 1,
                 failing=len(pending_ids),
                 model=self._model_for(attempt_no + 1),
+                # Named max_tokens, not token_budget: the log redactor masks any key that
+                # is exactly "token" between underscores, and a redacted budget is exactly
+                # the number you came to the log to read.
+                max_tokens=self.translator.completion_budget(batch, widen=widen),
             )
 
         await self._finish_batch(batch, attempts_by_segment)
@@ -346,11 +368,13 @@ class Orchestrator:
         """Persist one attempt per segment, with its evaluation if there was one."""
         for segment_id in batch.ids:
             text = result.texts.get(segment_id, "")
-            segment_findings = [
-                finding.describe()
+            relevant = [
+                finding
                 for finding in validation.critical
                 if finding.segment_id in (segment_id, None)
             ]
+            segment_findings = [finding.describe() for finding in relevant]
+            segment_checks = [finding.check for finding in relevant]
             verdict = evaluation.verdicts.get(segment_id) if evaluation else None
 
             row_id = self.store.record_attempt(
@@ -386,6 +410,7 @@ class Orchestrator:
                     text=text,
                     verdict=verdict,
                     validation=segment_findings,
+                    checks=segment_checks,
                     attempt_row_id=row_id,
                 )
             )
@@ -462,8 +487,31 @@ class Orchestrator:
             # complete and obviously untranslated, rather than silently missing a paragraph.
             source = batch.source_map().get(segment_id, "")
             best = Attempt(attempt_no=0, model="none", text=source)
-            reason = "every attempt returned nothing; source text kept as a placeholder"
-            log.error("segment_never_translated", segment_id=segment_id, batch=batch.index)
+            truncated_throughout = bool(attempts) and all(
+                "truncation" in a.checks for a in attempts
+            )
+            if truncated_throughout:
+                # The distinctive signature of a reasoning model whose thinking ate the
+                # whole completion budget: nothing wrong with the prompt or the model, the
+                # answer simply never got room to be written.
+                reason = (
+                    "every attempt stopped for length before this segment was reached; "
+                    "source text kept as a placeholder"
+                )
+                log.error(
+                    "segment_never_translated",
+                    segment_id=segment_id,
+                    batch=batch.index,
+                    cause="truncation",
+                    remedy=(
+                        "the model ran out of completion budget on every attempt; raise "
+                        "translation.reasoning_headroom_tokens (FOLIOAI_TRANSLATION__"
+                        "REASONING_HEADROOM_TOKENS) if it emits reasoning tokens"
+                    ),
+                )
+            else:
+                reason = "every attempt returned nothing; source text kept as a placeholder"
+                log.error("segment_never_translated", segment_id=segment_id, batch=batch.index)
 
         return SegmentOutcome(
             segment_id=segment_id,

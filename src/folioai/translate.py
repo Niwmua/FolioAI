@@ -163,6 +163,30 @@ class Translator:
 
     # -- the call ---------------------------------------------------------------------
 
+    def completion_budget(self, batch: Batch, *, widen: int = 0) -> int:
+        """The ``max_tokens`` for one batch.
+
+        Three parts, and the middle one is the reason this is a method rather than a line:
+
+        * **the translation itself** -- source tokens times ``max_completion_ratio``, which
+          brackets how far a language pair can expand;
+        * **reasoning headroom** -- a flat allowance for models that think before they
+          write. Those tokens are charged against ``max_tokens`` and never appear in the
+          response, so a budget sized for the visible answer alone is spent on thinking and
+          the endpoint stops for length partway through the first segment;
+        * **the widening** -- each truncated attempt doubles the budget for the next one,
+          because retrying a length failure with the same ceiling produces the same failure.
+
+        ``widen`` is bounded by ``retry.max_attempts``, so the doubling cannot run away.
+        """
+        cfg = self.settings.translation
+        budget = int(batch.source_tokens * cfg.max_completion_ratio) + 512
+        budget += cfg.reasoning_headroom_tokens
+        # Annotated because int.__pow__ is typed as returning Any (negative exponents give
+        # a float), which would leak Any into the return type under strict mode.
+        doubling: int = 2**widen
+        return budget * doubling
+
     async def translate_batch(
         self,
         batch: Batch,
@@ -172,6 +196,7 @@ class Translator:
         model: str | None = None,
         temperature: float | None = None,
         retry: RetryContext | None = None,
+        widen: int = 0,
     ) -> BatchTranslation:
         """Translate one batch once. Never retries -- that is the orchestrator's job."""
         model = model or self.settings.models.translator
@@ -180,7 +205,7 @@ class Translator:
             temperature = temperatures[min(attempt_no - 1, len(temperatures) - 1)]
 
         messages = self.build_messages(batch, context, retry=retry)
-        max_tokens = int(batch.source_tokens * self.settings.translation.max_completion_ratio) + 512
+        max_tokens = self.completion_budget(batch, widen=widen)
 
         response = await self.client.complete(
             messages,
@@ -212,6 +237,9 @@ class Translator:
             unexpected=len(result.unexpected),
             cached=response.cached,
             latency_ms=response.latency_ms,
+            max_tokens=max_tokens,
+            truncated=response.truncated,
+            reasoning_tokens=response.reasoning_tokens,
         )
         return result
 

@@ -35,6 +35,23 @@ PASS = {"completeness": 96, "accuracy": 94, "terminology": 95, "fluency": 92, "f
 DROP_EVERY = 3
 
 
+def _isolate_state(tmp: str) -> None:
+    """Point every piece of job state at a throwaway directory (D-137).
+
+    Setting ``FOLIOAI_HOME`` alone is not enough: a ``config/.env`` that pins the individual
+    paths wins over it, and the demo then runs against the real ``~/.folioai`` -- where it
+    finds this fixture's job already finished, skips every call, and reports that a saboteur
+    dropped nothing. The cache matters too, or the fake's output is replaced by whatever a
+    real run of the same book left behind.
+    """
+    home = Path(tmp)
+    os.environ["FOLIOAI_HOME"] = tmp
+    os.environ["FOLIOAI_JOBS_DIR"] = str(home / "jobs")
+    os.environ["FOLIOAI_LOGS_DIR"] = str(home / "logs")
+    os.environ["FOLIOAI_STATE_FILE"] = str(home / "state.json")
+    os.environ["FOLIOAI_CACHE_DB"] = str(home / "cache.db")
+
+
 def sabotaged() -> object:
     """Drops every 3rd segment on first attempts; behaves on retries."""
     state = {"translate_calls": 0, "evaluate_calls": 0, "dropped": 0}
@@ -74,7 +91,7 @@ async def main() -> int:
     settings.translation.batch_tokens = 400
 
     with tempfile.TemporaryDirectory(prefix="folioai-sabotage-", ignore_cleanup_errors=True) as tmp:
-        os.environ["FOLIOAI_HOME"] = tmp
+        _isolate_state(tmp)
         handler = sabotaged()
         context = prepare_job(FIXTURE, settings, target_lang="de")
         try:

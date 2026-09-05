@@ -38,6 +38,17 @@ log = get_logger(__name__)
 
 Message = dict[str, str]
 
+#: Models already warned about a thinking budget that ate their answer. One line per model
+#: is a diagnosis; one per call is noise nobody reads.
+_warned_reasoning: set[str] = set()
+
+
+def _warn_once(seen: set[str], key: str, event: str, **fields: Any) -> None:
+    if key in seen:
+        return
+    seen.add(key)
+    log.warning(event, model=key, **fields)
+
 
 @dataclass(slots=True)
 class LLMResponse:
@@ -47,6 +58,9 @@ class LLMResponse:
     model: str
     prompt_tokens: int = 0
     completion_tokens: int = 0
+    #: Of ``completion_tokens``, how many the model spent thinking. Invisible in ``text``
+    #: but charged against ``max_tokens``, which is what makes a truncation diagnosable.
+    reasoning_tokens: int = 0
     cost: Cost = field(default_factory=lambda: Cost(0, 0, 0.0))
     latency_ms: int = 0
     cached: bool = False
@@ -341,7 +355,15 @@ class OpenAICompatibleClient:
             completion_tokens = count_message_tokens([{"content": text}])
             log.debug("usage_missing_estimated", model=model)
 
-        cost = price_call(model, prompt_tokens, completion_tokens, self.settings)
+        reasoning_tokens = _reasoning_tokens(usage)
+        reported_usd = _reported_cost(usage)
+        if reported_usd is None:
+            cost = price_call(model, prompt_tokens, completion_tokens, self.settings)
+        else:
+            # The endpoint billed us and said what it charged. That beats a local price
+            # table every time -- it is the actual number, it covers models the table has
+            # never heard of, and it prices reasoning tokens the way the provider does.
+            cost = Cost(prompt_tokens, completion_tokens, reported_usd, known=True)
         self.budget.add(cost)
         self.limiter.refund(max(0, (params.get("max_tokens") or 0) - completion_tokens))
 
@@ -354,22 +376,99 @@ class OpenAICompatibleClient:
             purpose=purpose,
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
+            reasoning_tokens=reasoning_tokens,
             cost_usd=round(cost.usd, 6),
+            cost_source="endpoint" if reported_usd is not None else "table",
             latency_ms=latency_ms,
             finish_reason=choice.finish_reason,
+            max_tokens=params.get("max_tokens"),
             transient_retries=retries,
         )
+        if choice.finish_reason == "length" and reasoning_tokens > completion_tokens // 2:
+            # Say this out loud once per model. It is the difference between "the model is
+            # bad at this" and "the model never got room to answer", and the two have
+            # nothing in common as problems.
+            _warn_once(
+                _warned_reasoning,
+                model,
+                "reasoning_budget_exhausted",
+                reasoning_tokens=reasoning_tokens,
+                completion_tokens=completion_tokens,
+                max_tokens=params.get("max_tokens"),
+                remedy=(
+                    f"{model} spent most of its completion budget thinking and was cut off "
+                    "before finishing. Raise translation.reasoning_headroom_tokens "
+                    "(FOLIOAI_TRANSLATION__REASONING_HEADROOM_TOKENS)."
+                ),
+            )
         return LLMResponse(
             text=text,
             model=model,
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
+            reasoning_tokens=reasoning_tokens,
             cost=cost,
             latency_ms=latency_ms,
             transient_retries=retries,
             finish_reason=choice.finish_reason,
             params=params,
         )
+
+
+# -- usage extraction ---------------------------------------------------------------
+#
+# Both of these read fields that are not in the OpenAI schema but that most gateways send
+# anyway. They are optional by nature, so every read is defensive and a missing field means
+# "not reported" rather than an error: an endpoint that omits them must still work.
+
+
+def _usage_extra(usage: Any, name: str) -> Any:
+    """Read ``name`` off a usage object whether it is declared, extra, or a plain dict."""
+    if usage is None:
+        return None
+    if isinstance(usage, dict):
+        return usage.get(name)
+    value = getattr(usage, name, None)
+    if value is None:
+        extra = getattr(usage, "model_extra", None) or {}
+        value = extra.get(name)
+    return value
+
+
+def _reasoning_tokens(usage: Any) -> int:
+    """Thinking tokens, from ``completion_tokens_details.reasoning_tokens``.
+
+    Charged against ``max_tokens`` but absent from the response text, so without this a
+    truncated reasoning model looks like a model that simply stopped talking.
+    """
+    details = _usage_extra(usage, "completion_tokens_details")
+    value = _usage_extra(details, "reasoning_tokens")
+    try:
+        return max(0, int(value))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _reported_cost(usage: Any) -> float | None:
+    """What the endpoint says the call cost, in USD, or ``None`` if it did not say.
+
+    OpenRouter-style gateways return this on every call. Preferring it over the local
+    ``pricing:`` table is what stops a run reporting $0.00 for a model the table has never
+    heard of -- the failure mode is not a wrong number, it is a confident zero.
+    """
+    value = _usage_extra(usage, "cost")
+    if value is None:
+        return None
+    try:
+        cost = float(value)
+    except (TypeError, ValueError):
+        return None
+    return cost if cost >= 0 else None
+
+
+def reset_warnings() -> None:
+    """Forget which models have already warned. Test-support only."""
+    _warned_reasoning.clear()
 
 
 # -- error mapping ------------------------------------------------------------------

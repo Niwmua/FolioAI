@@ -84,9 +84,16 @@ async def main() -> int:
     settings.translation.batch_tokens = 400  # several batches out of a small fixture
 
     with tempfile.TemporaryDirectory(prefix="folioai-demo-", ignore_cleanup_errors=True) as tmp:
+        # Keep the demo out of the real ~/.folioai. Every path individually, not just HOME:
+        # a config/.env that pins them wins over HOME, and the demo would then replay a
+        # finished job and a cache full of real translations instead of the fake's (D-137).
         import os
 
-        os.environ["FOLIOAI_HOME"] = tmp  # keep the demo out of the real ~/.folioai
+        os.environ["FOLIOAI_HOME"] = tmp
+        os.environ["FOLIOAI_JOBS_DIR"] = str(Path(tmp) / "jobs")
+        os.environ["FOLIOAI_LOGS_DIR"] = str(Path(tmp) / "logs")
+        os.environ["FOLIOAI_STATE_FILE"] = str(Path(tmp) / "state.json")
+        os.environ["FOLIOAI_CACHE_DB"] = str(Path(tmp) / "cache.db")
 
         context = prepare_job(pdf, settings, target_lang="de")
         try:

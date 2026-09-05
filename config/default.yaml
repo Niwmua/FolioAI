@@ -54,6 +54,13 @@ translation:
   temperature: 0.2
   top_p: 1.0
   max_completion_ratio: 3.0
+  # Reserved on top of the ratio for models that think before they answer. Reasoning
+  # tokens count against max_tokens but are invisible in the response, so a budget sized
+  # for the visible translation alone gets spent on thinking and the answer is cut off
+  # mid-sentence -- usually after the first segment, which is why only chapter headings
+  # come back translated. Costs nothing on a non-reasoning model: max_tokens is a ceiling,
+  # not a reservation, and unused budget is refunded to the rate limiter.
+  reasoning_headroom_tokens: 2000
 
 context:
   previous_target_blocks: 2

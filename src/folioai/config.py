@@ -122,6 +122,15 @@ class TranslationConfig(_Model):
     max_completion_ratio: float = Field(
         default=3.0, gt=1.0, description="Completion token budget as a multiple of source tokens."
     )
+    reasoning_headroom_tokens: int = Field(
+        default=2000,
+        ge=0,
+        description=(
+            "Completion budget reserved for tokens the model spends thinking before it "
+            "writes anything. Reasoning models charge those against max_tokens, so a "
+            "budget sized only for the visible answer truncates every response."
+        ),
+    )
 
 
 class ContextConfig(_Model):

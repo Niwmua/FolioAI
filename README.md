@@ -294,7 +294,9 @@ What follows is deliberately ordered cheapest-first:
 3. **The ladder** (`orchestrate.py`) — attempt 1 at 0.2, attempt 2 at 0.3 with the previous
    output and the reviewer's issues attached, attempt 3 on the escalation model at 0.0. After
    that the highest-scoring attempt is kept and flagged `needs_review`. Content is never
-   dropped, and the output never has a gap.
+   dropped, and the output never has a gap. An attempt that stopped for *length* also doubles
+   the next one's token budget — every other rung addresses a model that answered badly, and
+   none of them help one that never got room to answer.
 4. **The circuit breaker** — if a quarter of a chapter's segments *and* at least eight of
    them fail their first attempt, the run stops. That pattern means the prompt, the model or
    the extraction is broken, and grinding through 300 more pages of it just burns money.
@@ -365,6 +367,30 @@ That inheritance is not a convenience. Naming a vendor's model as the default fo
 secondary role means someone who configured two models for their own gateway gets a system
 that translates and evaluates correctly and then, on attempt 3 of the retry ladder, calls a
 model the endpoint has never heard of — halfway through a book, after the money is spent.
+
+### Reasoning models
+
+If your translator thinks before it answers, its thinking is billed as completion tokens and
+counted against `max_tokens`, while appearing nowhere in the response. A budget sized for the
+visible translation alone therefore gets spent on reasoning and the reply is cut off — in
+practice after the first block, so a book comes back with translated chapter headings and
+untranslated paragraphs.
+
+`translation.reasoning_headroom_tokens` (default 2000) is reserved on top of the length-based
+budget for exactly this, and any attempt that stops for length doubles the next one's budget.
+Both are free on a model that does not think: `max_tokens` is a ceiling, not a reservation.
+
+If a run still truncates, the log says so directly:
+
+```
+$ folioai translate book.pdf --to de
+...
+warning  reasoning_budget_exhausted  model=... reasoning_tokens=2110 max_tokens=2776
+```
+
+```ini
+FOLIOAI_TRANSLATION__REASONING_HEADROOM_TOKENS=4000
+```
 
 ### Checking what is actually in effect
 

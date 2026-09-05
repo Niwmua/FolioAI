@@ -23,8 +23,10 @@ from folioai.llm.fake import (
     refusing_translator,
 )
 from folioai.orchestrate import CircuitBreakerTripped, Orchestrator, seed_segments
+from folioai.segment import segment_document
 from folioai.store import JobStore
 from folioai.tags import parse_segments
+from folioai.translate import Translator
 
 PASS_SCORES = {
     "completeness": 98,
@@ -535,3 +537,111 @@ def test_an_unjudged_segment_is_not_treated_as_a_pass(settings: Settings) -> Non
     verdict = decide(evaluation, ["b0001"], settings)["b0001"]
     assert not verdict.passed
     assert "no score" in verdict.reason
+
+
+# -- reasoning models and the completion budget -----------------------------------------
+#
+# The failure these cover, seen against a real endpoint: a thinking model spent 750 of its
+# 785-token budget reasoning, the endpoint stopped for length after the first <seg>, and
+# every retry hit the identical ceiling. The book came back with German chapter headings
+# and English paragraphs -- the headings survived only because they are three tokens long
+# and come first in the batch.
+
+
+def _budget_for_first_batch(document: Document, settings: Settings) -> int:
+    """The token budget the translator would actually use, without duplicating the sum."""
+    translator = Translator(FakeLLMClient(), settings, document=document, target_lang="de")
+    return translator.completion_budget(next(iter(segment_document(document, settings))))
+
+
+def test_the_budget_reserves_headroom_for_thinking(tiny_doc: Document, settings: Settings) -> None:
+    settings.translation.reasoning_headroom_tokens = 0
+    without = _budget_for_first_batch(tiny_doc, settings)
+    settings.translation.reasoning_headroom_tokens = 2000
+    with_headroom = _budget_for_first_batch(tiny_doc, settings)
+
+    assert with_headroom == without + 2000
+
+
+def test_each_truncated_attempt_doubles_the_next_budget(
+    tiny_doc: Document, settings: Settings
+) -> None:
+    translator = Translator(FakeLLMClient(), settings, document=tiny_doc, target_lang="de")
+    batch = next(iter(segment_document(tiny_doc, settings)))
+    base = translator.completion_budget(batch)
+
+    assert translator.completion_budget(batch, widen=1) == base * 2
+    assert translator.completion_budget(batch, widen=2) == base * 4
+
+
+async def test_a_thinking_model_loses_everything_after_the_heading_without_headroom(
+    tiny_doc: Document, settings: Settings, job_store: JobStore
+) -> None:
+    """The bug, reproduced: one call, a budget sized for the answer alone, headings only."""
+    settings.translation.reasoning_headroom_tokens = 0
+    settings.retry.max_attempts = 1  # isolate the single call; no widening to rescue it
+    budget = _budget_for_first_batch(tiny_doc, settings)
+
+    client = FakeLLMClient(judge(), reasoning_tokens=budget - 20)
+    orchestrator = build(job_store, tiny_doc, settings, client)
+    await orchestrator.run()
+
+    outcomes = orchestrator.outcomes
+    assert outcomes["b0000"].text.startswith("ZIEL")  # the heading got through
+    sources = {block.id: block.text for block in tiny_doc.blocks}
+    untranslated = [sid for sid, o in outcomes.items() if o.text == sources[sid]]
+    assert "b0001" in untranslated, "the bug is that everything after the heading is lost"
+    assert all(o.needs_review for o in outcomes.values())
+
+
+async def test_headroom_alone_keeps_a_thinking_model_within_budget(
+    tiny_doc: Document, settings: Settings, job_store: JobStore
+) -> None:
+    """The fix, on the first attempt: no retry, no widening, nothing truncated."""
+    client = FakeLLMClient(judge(), reasoning_tokens=750)
+    orchestrator = build(job_store, tiny_doc, settings, client)
+    await orchestrator.run()
+
+    assert all(o.text.startswith("ZIEL") for o in orchestrator.outcomes.values())
+    assert orchestrator.stats.retries == 0
+    assert orchestrator.stats.needs_review == 0
+
+
+async def test_a_truncated_attempt_is_retried_with_a_wider_budget_and_recovers(
+    tiny_doc: Document, settings: Settings, job_store: JobStore
+) -> None:
+    """Retrying a length failure against the same ceiling just reproduces it (§11)."""
+    settings.translation.reasoning_headroom_tokens = 0
+    budget = _budget_for_first_batch(tiny_doc, settings)
+
+    client = FakeLLMClient(judge(), reasoning_tokens=budget - 20)
+    orchestrator = build(job_store, tiny_doc, settings, client)
+    await orchestrator.run()
+
+    assert all(o.text.startswith("ZIEL") for o in orchestrator.outcomes.values())
+    assert orchestrator.stats.retries > 0, "attempt 1 must have been truncated"
+
+    widths = [
+        call.params["max_tokens"]
+        for call in client.calls_for("translate")
+        if call.segment_ids and call.segment_ids[0] == "b0000"
+    ]
+    assert widths[1] == widths[0] * 2, "the second attempt must get room the first lacked"
+
+
+async def test_a_segment_lost_to_truncation_says_so(
+    tiny_doc: Document, settings: Settings, job_store: JobStore
+) -> None:
+    """'Never got room to answer' and 'answered badly' are different problems."""
+    settings.translation.reasoning_headroom_tokens = 0
+    budget = _budget_for_first_batch(tiny_doc, settings)
+
+    # Enough thinking that even the fully widened final attempt has no room left.
+    client = FakeLLMClient(judge(), reasoning_tokens=budget * 8)
+    orchestrator = build(job_store, tiny_doc, settings, client)
+    await orchestrator.run()
+
+    sources = {block.id: block.text for block in tiny_doc.blocks}
+    lost = orchestrator.outcomes["b0001"]
+    assert lost.text == sources["b0001"], "the source is kept so the export has no gap"
+    assert "stopped for length" in lost.reason

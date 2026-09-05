@@ -1,0 +1,44 @@
+# Style profile (brief §7): the decisions a human translator settles before page one.
+# Copy this file, edit it, and pass it with --profile PATH.
+
+name: en-per
+target_lang: per
+register: literary
+formality: neutral_written   # written Persian; dialogue formality per character relationship
+tense_policy: preserve
+idioms: equivalent
+measurements: preserve
+culture_notes: none
+dialogue_punctuation: target_convention
+dialogue_convention: >-
+  Persian convention: guillemets « » for speech, with an em dash — opening a line of
+  dialogue in some house styles. Use the Persian comma ، the Persian semicolon ؛ and the
+  Persian question mark ؟ throughout; never their Latin lookalikes.
+profanity: preserve_intensity
+names: transliterate
+verse: preserve_lineation
+notes:
+  - "Text direction is RTL. Renderers must set dir=rtl and, for EPUB,
+     page-progression-direction=rtl. Never reorder the source's clause logic to suit the
+     script direction -- the order of ideas is the author's, not the script's."
+  - "The zero-width non-joiner (نیم‌فاصله, U+200C) is spelling, not spacing. It is required
+     in verb prefixes (می‌رود, نمی‌گوید), plurals (کتاب‌ها), and comparatives
+     (بزرگ‌تر). Writing میرود or کتابها is a spelling error, and writing a full space
+     instead is a different one."
+  - "Ezāfe is usually left unwritten, and that is correct for running prose. Mark it with
+     kasre only where a phrase is genuinely ambiguous without it."
+  - "Formality is a characterisation decision, exactly like du/Sie in German. Fix the level
+     per character pair -- شما versus تو, and whether verbs take the plural-of-respect --
+     and keep it stable for the whole book. Once a pair shifts, it stays shifted."
+  - "Ta'arof is a register, not an addition. Render the source's politeness at the same
+     strength: do not add elaborate courtesies the English does not have, and do not
+     flatten courtesies it does."
+  - "Use Persian letterforms, not Arabic ones: ی (U+06CC) not ي, ک (U+06A9) not ك. The
+     extractor folds these in the source; the translation must not reintroduce them."
+  - "Digits: keep the source's numerals for dates, measurements and citations unless the
+     house style says otherwise. If Persian numerals (۰-۹) are used, use them consistently
+     throughout -- mixing systems within a book looks like an error."
+  - "Persian expands modestly against English, mostly through compound verbs. Do not
+     compress to compensate, and do not pad."
+  - "Colloquial spoken forms (می‌رم for می‌روم) belong only where the source itself is
+     colloquial. Narration stays in written Persian even when dialogue does not."

@@ -26,6 +26,10 @@ from .pricing import Cost
 
 Handler = Callable[[list[Message], str], str]
 
+#: Rough chars-per-token, only ever used to turn a simulated token budget into a character
+#: cut. Exactness would not make the fake any more faithful.
+_CHARS_PER_TOKEN = 4.0
+
 
 @dataclass(slots=True)
 class RecordedCall:
@@ -60,6 +64,11 @@ class FakeLLMClient:
             last response proves nothing.
         latency_s: Simulated delay, for exercising concurrency.
         fail_times: Raise this many transient errors before succeeding, to test retry paths.
+        reasoning_tokens: Tokens this model "thinks" before writing anything. When set, the
+            response is clipped to whatever ``max_tokens`` is left over and ``finish_reason``
+            becomes ``length`` -- which is how a reasoning model behaves against a budget
+            sized only for the visible answer, and the exact shape of the bug that made a
+            real run return chapter headings and nothing else.
     """
 
     def __init__(
@@ -71,6 +80,7 @@ class FakeLLMClient:
         fail_times: int = 0,
         prompt_tokens: int = 100,
         completion_tokens: int = 120,
+        reasoning_tokens: int = 0,
     ) -> None:
         if handler is None and responses is None:
             handler = echo_translator()
@@ -80,6 +90,7 @@ class FakeLLMClient:
         self.remaining_failures = fail_times
         self.prompt_tokens = prompt_tokens
         self.completion_tokens = completion_tokens
+        self.reasoning_tokens = reasoning_tokens
         self.calls: list[RecordedCall] = []
         self.max_concurrent = 0
         self._in_flight = 0
@@ -139,15 +150,36 @@ class FakeLLMClient:
         finally:
             self._in_flight -= 1
 
+        text, finish_reason, completion_tokens = self._apply_budget(text, max_tokens)
         return LLMResponse(
             text=text,
             model=model,
             prompt_tokens=self.prompt_tokens,
-            completion_tokens=self.completion_tokens,
-            cost=Cost(self.prompt_tokens, self.completion_tokens, 0.0),
+            completion_tokens=completion_tokens,
+            reasoning_tokens=min(self.reasoning_tokens, completion_tokens),
+            cost=Cost(self.prompt_tokens, completion_tokens, 0.0),
             latency_ms=int(self.latency_s * 1000),
+            finish_reason=finish_reason,
             params=params,
         )
+
+    def _apply_budget(self, text: str, max_tokens: int | None) -> tuple[str, str, int]:
+        """Spend ``reasoning_tokens`` first, then clip the answer to what is left.
+
+        Mechanical, like every other behaviour here: the same budget always cuts at the
+        same character, so a test that passes once passes every time.
+        """
+        if not self.reasoning_tokens or max_tokens is None:
+            return text, "stop", self.completion_tokens
+
+        visible_budget = max_tokens - self.reasoning_tokens
+        if visible_budget <= 0:
+            return "", "length", max_tokens
+        limit = int(visible_budget * _CHARS_PER_TOKEN)
+        if len(text) <= limit:
+            spent = self.reasoning_tokens + int(len(text) / _CHARS_PER_TOKEN)
+            return text, "stop", spent
+        return text[:limit], "length", max_tokens
 
     async def aclose(self) -> None:
         return None
