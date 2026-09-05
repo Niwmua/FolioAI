@@ -24,6 +24,7 @@ from ..ir import (
     ImageRef,
     make_block_id,
 )
+from ..llm.client import LLMClient
 from ..logging_setup import get_logger
 from ..structure import StructurePlan, detect_structure
 from .base import Extractor, RawDocument
@@ -51,14 +52,9 @@ def build_extractor(name: str, *, workdir: Path | None = None) -> Extractor:
     if name == "ocr":
         return OCRExtractor(workdir=workdir)
     if name == "marker":
-        raise ExtractionError(
-            "The 'marker' extractor is not available in this build.",
-            remedy=(
-                "It arrives in milestone 8 behind the 'ml' extra. Use --extractor pymupdf, "
-                "or --extractor poppler for stubborn multi-column layouts."
-            ),
-            context={"extractor": name},
-        )
+        from .marker import MarkerExtractor
+
+        return MarkerExtractor()
     raise ExtractionError(
         f"Unknown extractor: {name!r}.",
         remedy="Choose one of: auto, pymupdf, poppler, ocr, marker.",
@@ -253,20 +249,31 @@ def build_document(
     )
 
 
-def extract_document(
+@dataclass(slots=True)
+class RawExtraction:
+    """What the extractor produced, before cleaning turns it into an IR.
+
+    A named intermediate step so a caller can inspect or repair the raw pages -- which is
+    exactly what the vision fallback does -- without re-running extraction or duplicating
+    the cleaning pipeline (§4.2).
+    """
+
+    raw: RawDocument
+    probe: ProbeResult
+    extractor_name: str
+    reason: str
+    path: Path
+    started: float
+
+
+def extract_raw(
     path: Path,
     settings: Settings,
     *,
     probe_result: ProbeResult | None = None,
     workdir: Path | None = None,
-) -> ExtractionResult:
-    """Run the full extraction pipeline over a PDF.
-
-    Args:
-        path: The source PDF.
-        settings: Merged configuration.
-        probe_result: A probe already run for this file, to avoid probing twice.
-        workdir: Where derived files (an OCR'd PDF) may be written.
+) -> RawExtraction:
+    """Probe, choose an extractor, and run it. No cleaning, no IR yet.
 
     Raises:
         ExtractionError: if the PDF cannot be opened, the chosen extractor is unavailable,
@@ -288,12 +295,32 @@ def extract_document(
             ),
             context={"path": str(path), "extractor": extractor.name},
         )
+    return RawExtraction(
+        raw=raw,
+        probe=probe,
+        extractor_name=extractor.name,
+        reason=reason,
+        path=path,
+        started=started,
+    )
 
-    cleaned = clean_document(raw, settings)
+
+def build_extraction_result(extraction: RawExtraction, settings: Settings) -> ExtractionResult:
+    """Clean, structure and assemble the IR from an already-extracted document."""
+    raw = extraction.raw
+    probe = extraction.probe
+    path = extraction.path
+    started = extraction.started
+    reason = extraction.reason
+    extractor_name = extraction.extractor_name
+
+    # The probe already detected the language, and cleaning needs it for the Perso-Arabic
+    # letter folding -- which must not be applied to Arabic.
+    cleaned = clean_document(raw, settings, lang=probe.source_lang)
     plan = detect_structure(cleaned.paragraphs, raw, settings, cleaned.body_size)
 
     report = ExtractionReport(
-        extractor=extractor.name,
+        extractor=extractor_name,
         page_count=raw.page_count,
         fallback_pages=raw.fallback_pages,
         raw_line_count=raw.line_count,
@@ -335,3 +362,51 @@ def extract_document(
         extractor_reason=reason,
         warnings=report.warnings,
     )
+
+
+def extract_document(
+    path: Path,
+    settings: Settings,
+    *,
+    probe_result: ProbeResult | None = None,
+    workdir: Path | None = None,
+) -> ExtractionResult:
+    """Run the full extraction pipeline over a PDF. Free, offline, no network.
+
+    Args:
+        path: The source PDF.
+        settings: Merged configuration.
+        probe_result: A probe already run for this file, to avoid probing twice.
+        workdir: Where derived files (an OCR'd PDF) may be written.
+    """
+    extraction = extract_raw(path, settings, probe_result=probe_result, workdir=workdir)
+    return build_extraction_result(extraction, settings)
+
+
+async def extract_document_with_vision(
+    path: Path,
+    settings: Settings,
+    client: LLMClient,
+    *,
+    probe_result: ProbeResult | None = None,
+    workdir: Path | None = None,
+) -> ExtractionResult:
+    """Extract, then re-read the worst pages with a vision model (§4.2).
+
+    Opt-in and budget-capped by the caller: the decision to spend has already been made by
+    the time this is called, and only the page cap is enforced here. Which pages were
+    re-read goes into the extraction report, because extractors are never silently mixed.
+    """
+    from .vision import apply_transcriptions, find_bad_pages, transcribe_pages
+
+    extraction = extract_raw(path, settings, probe_result=probe_result, workdir=workdir)
+    candidates = find_bad_pages(
+        extraction.raw, settings, max_pages=settings.extraction.vision_max_pages
+    )
+    if not candidates:
+        log.info("vision_fallback_not_needed", path=str(path))
+        return build_extraction_result(extraction, settings)
+
+    result = await transcribe_pages(path, candidates, client, settings)
+    apply_transcriptions(extraction.raw, result, extraction.raw.body_size())
+    return build_extraction_result(extraction, settings)

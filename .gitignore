@@ -229,3 +229,5 @@ tests/fixtures/pdfs/
 book.md
 ir.json
 audit.json
+# Demo output
+demo-output/

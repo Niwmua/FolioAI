@@ -28,7 +28,9 @@ render = [
     "pillow>=12.0",
 ]
 tokens = ["tiktoken>=0.7"]
-# The `ml` extra (marker/docling) arrives in milestone 8; see DECISIONS D-06.
+# Heavy, optional, never chosen automatically: marker pulls in torch and downloads model
+# weights on first use. It conflicts with `render` over pillow, declared below.
+ml = ["marker-pdf>=1.0"]
 
 [project.scripts]
 folioai = "folioai.cli:main"
@@ -47,8 +49,18 @@ dev = [
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
+# marker-pdf pins an older pillow than weasyprint needs. Declaring the conflict lets uv
+# resolve each extra separately instead of failing the whole lock.
+[tool.uv]
+conflicts = [[{ extra = "ml" }, { extra = "render" }]]
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/folioai"]
+
+# The brief keeps config/ at the repository root, which is where it should be edited. The
+# wheel needs its own copy, or an installed folioai has no defaults and no style profiles.
+[tool.hatch.build.targets.wheel.force-include]
+"config" = "folioai/_config"
 
 [tool.ruff]
 line-length = 100
@@ -65,7 +77,10 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/*" = ["ARG001", "ARG002"]
+# Fake-client handlers take (messages, model) to match the protocol; most ignore model.
+# Callback signatures are fixed by the protocols they satisfy; most ignore an argument.
+"tests/*" = ["ARG001", "ARG002", "ARG005"]
+"examples/*" = ["ARG001", "ARG002", "ARG005"]
 
 [tool.mypy]
 python_version = "3.11"
@@ -75,14 +90,22 @@ warn_unreachable = true
 plugins = []
 
 [[tool.mypy.overrides]]
-module = ["fitz.*", "pymupdf.*", "lingua.*", "slugify.*", "reportlab.*"]
+module = [
+    "fitz.*", "pymupdf.*", "lingua.*", "slugify.*", "reportlab.*",
+    "ebooklib.*", "weasyprint.*", "docx.*", "marker.*",
+]
 ignore_missing_imports = true
 
 # PyMuPDF ships type hints but leaves most of its API untyped. Relaxing this one check for
 # the three modules that talk to it beats sprinkling casts through the extractors; every
 # other strict check still applies to them.
 [[tool.mypy.overrides]]
-module = ["folioai.extract.pymupdf", "folioai.extract.probe", "folioai.extract.poppler"]
+module = [
+    "folioai.extract.pymupdf",
+    "folioai.extract.probe",
+    "folioai.extract.poppler",
+    "folioai.extract.vision",
+]
 disallow_untyped_calls = false
 
 [tool.pytest.ini_options]

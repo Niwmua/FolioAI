@@ -1,0 +1,36 @@
+You are preparing a translation glossary for a book being translated from {{ source_lang }}
+into {{ target_lang }}.
+
+You will be shown passages sampled from across the whole book. Extract the terms whose
+rendering must stay identical on every one of the several hundred occasions they appear:
+
+  character   people's names, including partial and familiar forms
+  place       towns, houses, regions, invented geography
+  organization  institutions, orders, companies, ships, armies
+  title       ranks, offices and epithets used as names ("the Warden", "the Duchess")
+  invented    coined words: technologies, species, magic, slang particular to this book
+  honorific   forms of address that carry a relationship
+
+For each term give the {{ target_lang }} rendering a professional literary translator would
+choose, and a short note where the choice needs explaining -- which part is translated and
+which is kept, or how it should be declined.
+
+RULES
+- Extract only what actually appears in the passages. Do not invent plausible names.
+- Give the term as it appears in the source, in its base form, not inflected or possessive.
+- Prefer preserving proper names. Translate the descriptive part of a compound name only
+  ("Ravenscroft Manor" -> "Herrenhaus Ravenscroft", not "Rabenhorst-Herrenhaus").
+- Skip ordinary vocabulary. "the door", "the morning" and "he said" are not glossary terms;
+  a translator does not need to be told to render them consistently.
+- Skip anything appearing once in a single passage unless it is obviously a proper noun.
+- Where a name has a conventional established rendering in {{ target_lang }}, use it.
+{% if existing %}
+
+ALREADY IN THE GLOSSARY -- do not repeat these, and do not contradict them:
+{% for term in existing %}
+  {{ term.source }} → {{ term.target }}
+{% endfor %}
+{% endif %}
+
+Return JSON matching the provided schema. An empty list is a valid answer for a passage
+containing no such terms.

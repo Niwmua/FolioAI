@@ -27,11 +27,26 @@ from typing import Any, Literal
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from .env import load_env
 from .errors import ConfigError
-from .paths import ENV_PREFIX, user_config_path
+from .paths import (
+    ENV_PREFIX,
+    packaged_defaults_path,
+    profiles_dir,
+    user_config_path,
+)
 
-PACKAGED_DEFAULTS = Path(__file__).resolve().parent.parent.parent / "config" / "default.yaml"
-PROFILES_DIR = Path(__file__).resolve().parent.parent.parent / "config" / "profiles"
+
+# Resolved on every use rather than captured at import: FOLIOAI_CONFIG_DIR can point these
+# somewhere else, and a module-level constant would freeze whatever was set when the first
+# import happened -- which, in a test suite, is whatever ran first.
+def _packaged_defaults() -> Path:
+    return packaged_defaults_path()
+
+
+def _profiles_dir() -> Path:
+    return profiles_dir()
+
 
 Severity = Literal["critical", "warning", "info"]
 
@@ -345,21 +360,14 @@ def _api_key_from_env(environ: dict[str, str] | None = None) -> str | None:
 
 
 def load_dotenv(path: Path) -> dict[str, str]:
-    """Minimal ``.env`` reader. Values already in the environment win."""
-    if not path.is_file():
-        return {}
-    loaded: dict[str, str] = {}
-    for line in path.read_text(encoding="utf-8").splitlines():
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#") or "=" not in stripped:
-            continue
-        name, _, value = stripped.partition("=")
-        name = name.strip()
-        value = value.strip().strip("'\"")
-        if name and name not in os.environ:
-            os.environ[name] = value
-            loaded[name] = value
-    return loaded
+    """Load one ``.env`` file. Values already in the environment win.
+
+    Kept as the historical name; the implementation lives in :mod:`folioai.env` alongside
+    the rest of the file-location logic.
+    """
+    from .env import load_dotenv_file
+
+    return load_dotenv_file(path)
 
 
 def load_settings(
@@ -383,9 +391,13 @@ def load_settings(
     project_dir = project_dir or Path.cwd()
     sources: list[str] = []
 
+    # .env first: it can move every path this function is about to read from.
+    load_env(project_dir)
+
     merged: dict[str, Any] = {}
-    if PACKAGED_DEFAULTS.is_file():
-        merged = _load_yaml(PACKAGED_DEFAULTS)
+    defaults = _packaged_defaults()
+    if defaults.is_file():
+        merged = _load_yaml(defaults)
         sources.append("packaged defaults")
 
     for candidate, label in (
@@ -405,7 +417,6 @@ def load_settings(
         merged = _deep_merge(merged, _load_yaml(extra_config))
         sources.append(f"--config ({extra_config})")
 
-    load_dotenv(project_dir / ".env")
     env_overlay = config_from_env(environ)
     if env_overlay:
         merged = _deep_merge(merged, env_overlay)
@@ -435,11 +446,26 @@ def load_settings(
     return settings
 
 
+def packaged_settings() -> Settings:
+    """Settings from the packaged defaults alone.
+
+    No user file, no project file, no environment. Used by tests and by library callers who
+    want the shipped configuration without whatever happens to be on the machine -- notably
+    the ``pricing:`` table, which lives in YAML by design (§13) and so is absent from a bare
+    ``Settings()``.
+    """
+    defaults = _packaged_defaults()
+    data = _load_yaml(defaults) if defaults.is_file() else {}
+    data.pop("api_key", None)
+    return Settings.model_validate(data)
+
+
 def available_profiles() -> list[str]:
     """Names of the shipped style profiles."""
-    if not PROFILES_DIR.is_dir():
+    directory = _profiles_dir()
+    if not directory.is_dir():
         return []
-    return sorted(p.stem for p in PROFILES_DIR.glob("*.yaml"))
+    return sorted(p.stem for p in directory.glob("*.yaml"))
 
 
 def load_profile(name_or_path: str) -> dict[str, Any]:
@@ -447,7 +473,7 @@ def load_profile(name_or_path: str) -> dict[str, Any]:
     candidate = Path(name_or_path)
     if candidate.is_file():
         return _load_yaml(candidate)
-    packaged = PROFILES_DIR / f"{name_or_path}.yaml"
+    packaged = _profiles_dir() / f"{name_or_path}.yaml"
     if packaged.is_file():
         return _load_yaml(packaged)
     raise ConfigError(

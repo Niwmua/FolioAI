@@ -1,0 +1,29 @@
+Your previous translation of these segments was reviewed and did not meet the required
+standard. Here is what you produced:
+
+{{ previous_output }}
+
+{% if issues %}
+Here are the specific problems the reviewer identified:
+{% for issue in issues %}
+  [{{ issue.severity }}] {{ issue.segment_id }} — {{ issue.dimension }}
+    Source:      {{ issue.source_excerpt }}
+{% if issue.translation_excerpt %}
+    Your output: {{ issue.translation_excerpt }}
+{% endif %}
+    Problem:     {{ issue.explanation }}
+{% endfor %}
+{% endif %}
+{% if mechanical_problems %}
+Automated checks also found:
+{% for problem in mechanical_problems %}
+  - {{ problem }}
+{% endfor %}
+{% endif %}
+
+Produce a corrected translation. Fix exactly these problems. Do not restyle, rephrase,
+or "improve" anything the reviewer did not flag — unnecessary changes are themselves a
+defect. Pay particular attention to any omission: every clause of the source must be
+present in your output.
+
+Return the full set of segments again, in the original order, each with its original id.

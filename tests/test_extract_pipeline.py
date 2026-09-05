@@ -190,10 +190,24 @@ def test_selection_follows_the_probe_by_default(
     assert reason == probe.recommendation_reason
 
 
-def test_marker_extractor_says_when_it_arrives() -> None:
+def test_marker_extractor_exists_and_reports_its_own_availability() -> None:
+    """Never a hard dependency (§4.2): it says how to install itself instead of crashing."""
+    extractor = build_extractor("marker")
+    assert extractor.name == "marker"
+    available, hint = extractor.available()
+    if not available:
+        assert "uv sync --extra ml" in hint
+
+
+def test_requesting_an_unavailable_marker_explains_the_install(settings: Settings) -> None:
+    from folioai.extract.marker import MarkerExtractor
+
+    extractor = MarkerExtractor()
+    if extractor.available()[0]:
+        pytest.skip("marker is installed here, so there is no failure path to test")
     with pytest.raises(ExtractionError) as excinfo:
-        build_extractor("marker")
-    assert "milestone 8" in (excinfo.value.remedy or "")
+        extractor.extract(Path("whatever.pdf"), settings)
+    assert "extra ml" in (excinfo.value.remedy or "")
 
 
 def test_unknown_extractor_lists_the_real_ones() -> None:

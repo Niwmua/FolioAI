@@ -110,3 +110,35 @@ def test_logs_are_json_one_line_per_event(tmp_path: Path) -> None:
         assert event["event"] == "segment_done"
         assert "timestamp" in event and "level" in event
     reset_for_tests()
+
+
+def test_redaction_does_not_eat_token_counts(tmp_path: Path) -> None:
+    """The logs exist to record tokens, latency and cost (§18).
+
+    An earlier redactor matched any key containing "token" and erased prompt_tokens,
+    completion_tokens and max_tokens along with the credentials.
+    """
+    log_path = tmp_path / "job.jsonl"
+    reset_for_tests()
+    configure_logging(log_path=log_path, force=True)
+    get_logger("test").info(
+        "llm_call",
+        prompt_tokens=1234,
+        completion_tokens=567,
+        max_tokens=4096,
+        source_tokens=98_765,
+        budget_tokens=1200,
+        api_key="sk-or-v1-supersecretvalue123456",
+        access_token="secret-bearer-value-here",
+    )
+    logging.shutdown()
+
+    event = json.loads(log_path.read_text(encoding="utf-8").strip().splitlines()[-1])
+    assert event["prompt_tokens"] == 1234
+    assert event["completion_tokens"] == 567
+    assert event["max_tokens"] == 4096
+    assert event["source_tokens"] == 98_765
+    assert event["budget_tokens"] == 1200
+    assert event["api_key"] == "***redacted***"
+    assert event["access_token"] == "***redacted***"
+    reset_for_tests()

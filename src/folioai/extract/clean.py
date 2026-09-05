@@ -52,7 +52,23 @@ LIGATURES = {
 #: Spaces that should behave like a plain space for our purposes.
 SPACE_CHARS = "    ⁠"
 #: Characters that carry no information and only break comparisons.
-ZERO_WIDTH = "­​‌‍﻿"
+#:
+#: Note what is *not* here: U+200C ZERO WIDTH NON-JOINER and U+200D ZERO WIDTH JOINER.
+#: In Perso-Arabic and Indic scripts those carry a letter's worth of meaning rather than
+#: being typography. Persian mi-ravad without its ZWNJ is a misspelling, and so is
+#: ketab-ha: stripping them silently corrupted every Persian, Urdu and Hindi source.
+ZERO_WIDTH = "­​﻿"
+
+#: Letters Persian and Arabic spell with different code points despite rendering alike.
+#: Persian text typed on Arabic keyboards, and produced by many PDF generators, is full
+#: of the Arabic forms; folding them makes glossary matching and search behave. Applied
+#: only when the source language is Persian -- in Arabic the Arabic forms are correct.
+PERSIAN_FOLD = {
+    "\u064a": "\u06cc",  # ARABIC YEH -> FARSI YEH
+    "\u0649": "\u06cc",  # ALEF MAKSURA -> FARSI YEH
+    "\u0643": "\u06a9",  # ARABIC KAF -> KEHEH
+    "\u06aa": "\u06a9",  # SWASH KAF -> KEHEH
+}
 
 _ROMAN_RE = re.compile(r"^[ivxlcdm]+$", re.IGNORECASE)
 _DIGITS_RE = re.compile(r"\d+")
@@ -71,11 +87,17 @@ _FIGURE_RE = re.compile(r"^\s*(fig(?:ure)?\.?|table|plate|abb\.?|tabelle)\s*\d+"
 _FOOTNOTE_MARK_RE = re.compile(r"^\s*(\d{1,3}|[*†‡§¶]{1,3})[.):\s]\s*")
 
 
-def normalize_text(text: str) -> str:
-    """Ligatures to ASCII, odd spaces to spaces, zero-width gone, NFC.
+def normalize_text(text: str, *, lang: str | None = None) -> str:
+    """Ligatures to ASCII, odd spaces to spaces, zero-width noise gone, NFC.
 
     Smart quotes are deliberately preserved: they carry dialogue structure, and flattening
-    them loses information the target language's punctuation conventions need.
+    them loses information the target language's punctuation conventions need. So are ZWNJ
+    and ZWJ, which are spelling in Perso-Arabic scripts rather than formatting.
+
+    Args:
+        text: The text to normalise.
+        lang: Source language, when known. Persian gets its letter forms folded (see
+            :data:`PERSIAN_FOLD`); every other language is left alone.
     """
     for src, dst in LIGATURES.items():
         text = text.replace(src, dst)
@@ -83,15 +105,18 @@ def normalize_text(text: str) -> str:
         text = text.replace(char, "")
     for char in SPACE_CHARS:
         text = text.replace(char, " ")
+    if lang and lang.strip().lower().split("-")[0] == "fa":
+        for src, dst in PERSIAN_FOLD.items():
+            text = text.replace(src, dst)
     text = unicodedata.normalize("NFC", text)
     return re.sub(r"[ \t]{2,}", " ", text)
 
 
-def normalize_document(raw: RawDocument) -> None:
+def normalize_document(raw: RawDocument, lang: str | None = None) -> None:
     """Apply :func:`normalize_text` to every span, in place."""
     for line in raw.lines():
         for span in line.spans:
-            span.text = normalize_text(span.text)
+            span.text = normalize_text(span.text, lang=lang)
 
 
 # -- audit ------------------------------------------------------------------------
@@ -621,13 +646,19 @@ class CleanResult:
     body_size: float
 
 
-def clean_document(raw: RawDocument, settings: Settings) -> CleanResult:
-    """Run the whole cleaning pipeline over an extractor's output."""
+def clean_document(raw: RawDocument, settings: Settings, *, lang: str | None = None) -> CleanResult:
+    """Run the whole cleaning pipeline over an extractor's output.
+
+    Args:
+        raw: The extractor's output.
+        settings: Merged configuration.
+        lang: Detected source language, for language-specific normalisation.
+    """
     cfg = settings.cleaning
     audit = CleaningAudit()
 
     if cfg.normalize_unicode:
-        normalize_document(raw)
+        normalize_document(raw, lang)
 
     strip_furniture(raw, settings, audit)
     body_size = raw.body_size()
