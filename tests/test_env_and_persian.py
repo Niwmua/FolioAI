@@ -191,6 +191,8 @@ def test_describe_paths_lists_every_location(monkeypatch: pytest.MonkeyPatch) ->
         "state",
         "user config",
         "packaged config",
+        "binaries",
+        "fonts",
     }
     assert all(isinstance(value, Path) for value in described.values())
 

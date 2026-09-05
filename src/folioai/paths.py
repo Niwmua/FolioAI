@@ -14,6 +14,8 @@ disk, logs on a mounted volume, jobs somewhere with room for a few hundred books
 | ``FOLIOAI_STATE_FILE`` | ``$HOME/state.json`` | Machine-level state (the first-run notice) |
 | ``FOLIOAI_USER_CONFIG`` | ``$HOME/config.yaml`` | The user's own settings |
 | ``FOLIOAI_CONFIG_DIR`` | packaged ``config/`` | ``default.yaml``, ``profiles/`` and ``.env`` |
+| ``FOLIOAI_BIN_DIR`` | ``$HOME/bin`` | Helper binaries: Typst, epubcheck |
+| ``FOLIOAI_FONTS_DIR`` | ``$HOME/fonts`` | Extra fonts for PDF rendering |
 """
 
 from __future__ import annotations
@@ -106,6 +108,24 @@ def cache_db_path() -> Path:
     return env_path(f"{ENV_PREFIX}CACHE_DB", home_dir() / "cache.db")
 
 
+def bin_dir() -> Path:
+    """Where folioai looks for helper binaries it did not install itself.
+
+    A single-binary tool like Typst is often just downloaded rather than installed, and
+    landing it here means it works without touching PATH.
+    """
+    from .env import env_path
+
+    return env_path(f"{ENV_PREFIX}BIN_DIR", home_dir() / "bin")
+
+
+def fonts_dir() -> Path:
+    """Fonts made available to the PDF renderer, in addition to the system's."""
+    from .env import env_path
+
+    return env_path(f"{ENV_PREFIX}FONTS_DIR", home_dir() / "fonts")
+
+
 def profiles_dir() -> Path:
     """Shipped style profiles."""
     return packaged_config_dir() / "profiles"
@@ -126,6 +146,8 @@ def describe_paths() -> dict[str, Path]:
         "state": state_path(),
         "user config": user_config_path(),
         "packaged config": packaged_config_dir(),
+        "binaries": bin_dir(),
+        "fonts": fonts_dir(),
     }
 
 

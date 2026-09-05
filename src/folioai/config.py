@@ -235,7 +235,25 @@ class ExtractionConfig(_Model):
 
 
 class ExportConfig(_Model):
+    """Output settings, including where to find the tools that produce PDFs and check EPUBs.
+
+    The tool paths are configurable rather than PATH-only because both are commonly just
+    downloaded: Typst is a single binary, and epubcheck is a jar that needs a JVM. Requiring
+    someone to modify PATH before they can export a PDF is a bad trade.
+    """
+
     formats: list[str] = Field(default_factory=lambda: ["md"])
+    typst_path: Path | None = Field(
+        default=None, description="Typst binary. Searched on PATH and in the bin dir if unset."
+    )
+    epubcheck_path: Path | None = Field(
+        default=None,
+        description="epubcheck binary or .jar. Searched on PATH and in the bin dir if unset.",
+    )
+    font_paths: list[Path] = Field(
+        default_factory=list,
+        description="Extra font directories for the PDF renderer, beyond the fonts dir.",
+    )
     layout: Literal["target-only", "bilingual-paragraph", "bilingual-columns", "annotated"] = (
         "target-only"
     )
@@ -364,6 +382,9 @@ _FLAT_ENV_ALIASES: dict[str, tuple[str, ...]] = {
     "GLOSSARY_MODEL": ("models", "glossary"),
     "BACK_TRANSLATOR_MODEL": ("models", "back_translator"),
     "VISION_MODEL": ("models", "vision"),
+    "TYPST_PATH": ("export", "typst_path"),
+    "EPUBCHECK": ("export", "epubcheck_path"),
+    "PDF_ENGINE": ("export", "pdf_engine"),
     "MAX_COST": ("budget", "max_cost_usd"),
     "CONCURRENCY": ("translation", "concurrency"),
     "TIMEOUT": ("llm", "timeout_s"),

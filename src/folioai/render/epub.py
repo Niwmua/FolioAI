@@ -17,10 +17,12 @@ from ..errors import RenderError
 from ..ir import Document
 from ..logging_setup import get_logger
 from .base import RenderContext, document_metadata, is_rtl, iter_chapters
+from .epubcheck import ValidationResult
+from .epubcheck import validate_epub as _validate
 from .html import STYLE, block_to_html
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from ..config import Settings
 
 log = get_logger(__name__)
 
@@ -137,31 +139,10 @@ def render_epub(
     return path
 
 
-def validate_epub(path: Path) -> tuple[bool, Sequence[str]]:
-    """Run epubcheck when available (§14).
+def validate_epub(path: Path, settings: Settings | None = None) -> ValidationResult:
+    """Validate an EPUB (§14).
 
-    Returns:
-        ``(ok, messages)``. A missing epubcheck is reported as ``ok`` with a note: an
-        unvalidated EPUB is not a broken one, and failing the export over a missing
-        development tool would be worse than the risk it guards against.
+    Re-exported from :mod:`folioai.render.epubcheck`, which owns both the built-in
+    structural checks and the optional epubcheck integration.
     """
-    import shutil
-    import subprocess
-
-    binary = shutil.which("epubcheck")
-    if binary is None:
-        return True, ["epubcheck is not installed; the EPUB was written but not validated"]
-
-    try:
-        completed = subprocess.run(  # argv list, never a shell string
-            [binary, str(path)], capture_output=True, timeout=300, check=False
-        )
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        return True, [f"epubcheck could not be run: {exc}"]
-
-    output = (completed.stdout + completed.stderr).decode("utf-8", errors="replace")
-    problems = [line for line in output.splitlines() if "ERROR" in line or "FATAL" in line]
-    if completed.returncode != 0 or problems:
-        log.warning("epubcheck_failed", path=str(path), problems=len(problems))
-        return False, problems or ["epubcheck reported a failure"]
-    return True, []
+    return _validate(path, settings)

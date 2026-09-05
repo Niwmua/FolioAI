@@ -7,11 +7,12 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from sample_books import build_book as make_doc
 
 from folioai.config import Settings
 from folioai.errors import RenderError
 from folioai.export import export_document, parse_formats
-from folioai.ir import Block, Chapter, Document, ExtractionReport
+from folioai.ir import Block, Document
 from folioai.render.base import (
     RenderContext,
     font_for,
@@ -33,54 +34,6 @@ from folioai.review import (
     run_review,
 )
 from folioai.store import JobStore, SegmentRecord
-
-
-def make_doc(target: str = "de", *, title: str = "A Test Book") -> Document:
-    blocks = [
-        Block(id="b0000", kind="heading", level=1, text="Kapitel Eins", chapter_id="ch01"),
-        Block(
-            id="b0001",
-            kind="paragraph",
-            text="Ein *kursiver* Satz mit **Betonung**.",
-            chapter_id="ch01",
-        ),
-        Block(id="b0002", kind="blockquote", text="Ein Zitat.", chapter_id="ch01"),
-        Block(id="b0003", kind="scene_break", text="* * *", chapter_id="ch01", translate=False),
-        Block(id="b0004", kind="heading", level=1, text="Kapitel Zwei", chapter_id="ch02"),
-        Block(
-            id="b0005",
-            kind="paragraph",
-            text="Noch ein Absatz mit einer Fußnote[^1].",
-            chapter_id="ch02",
-            footnote_refs=["1"],
-        ),
-        Block(
-            id="b0006",
-            kind="footnote",
-            text="Die Fußnote selbst.",
-            chapter_id="ch02",
-            meta={"label": "1"},
-        ),
-    ]
-    return Document(
-        source_lang="en",
-        target_lang=target,
-        title=title,
-        author="Nobody",
-        chapters=[
-            Chapter(
-                id="ch01",
-                title="Kapitel Eins",
-                number=1,
-                block_ids=["b0000", "b0001", "b0002", "b0003"],
-            ),
-            Chapter(
-                id="ch02", title="Kapitel Zwei", number=2, block_ids=["b0004", "b0005", "b0006"]
-            ),
-        ],
-        blocks=blocks,
-        extraction_report=ExtractionReport(extractor="test", page_count=4, block_count=7),
-    )
 
 
 def source_doc() -> Document:
@@ -237,8 +190,8 @@ def test_a_failing_format_does_not_stop_the_others(
     """Losing an EPUB because a PDF engine is missing would be absurd."""
     import folioai.render.pdf as pdf_module
 
-    monkeypatch.setattr(pdf_module, "typst_available", lambda: False)
-    monkeypatch.setattr(pdf_module, "weasyprint_available", lambda: False)
+    monkeypatch.setattr(pdf_module, "typst_available", lambda *_args: False)
+    monkeypatch.setattr(pdf_module, "weasyprint_available", lambda *_args: False)
 
     result = export_document(
         make_doc(), tmp_path, formats=["md", "pdf"], context=RenderContext(), settings=settings

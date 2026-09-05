@@ -59,6 +59,60 @@ Optional extras:
 `ml` conflicts with `render` over pillow, so install it on its own:
 `uv sync --extra ml`.
 
+### PDF output
+
+PDF uses [Typst](https://typst.app) — one binary, no system dependencies, and real book
+typography: running heads that name the current chapter, chapter openers on recto pages,
+proper margins and hyphenation for the target language.
+
+```bash
+winget install Typst.Typst        # Windows
+brew install typst                # macOS
+```
+
+Or download the binary and drop it in folioai's bin directory — no installer, no PATH
+surgery:
+
+```bash
+uv run folioai paths              # shows the bin directory
+```
+
+WeasyPrint is the fallback when Typst is absent, and `export.typst_path` points at a binary
+anywhere.
+
+**Fonts.** Most machines have no Persian, Arabic or CJK serif face, and a book of empty
+boxes is worse than a failed render — so a missing font is an error that names the font and
+tells you where to put it. Drop any `.ttf` or `.otf` into the fonts directory (also shown by
+`folioai paths`) and it is offered to the renderer automatically:
+
+| Target | Font | Where |
+|---|---|---|
+| Persian | Vazirmatn | github.com/rastikerdar/vazirmatn |
+| Arabic | Noto Naskh Arabic | fonts.google.com/noto |
+| CJK | Noto Serif CJK | github.com/notofonts |
+| Latin, Cyrillic, Greek | Noto Serif, or your system serif | usually already present |
+
+### EPUB validation
+
+Every EPUB is validated as it is written. Two layers:
+
+**Structural checks, always.** No dependencies. They verify the things that actually break
+readers: the `mimetype` entry's position and compression, the container pointing at a real
+OPF, `dc:title`/`language`/`identifier`, every manifest href existing in the archive, every
+spine reference resolving, a nav document, and every XHTML file parsing as XML.
+
+**epubcheck, when it can be found.** It is the authority for conformance detail, but it is a
+Java jar, and needing a JVM before you can export a book is a poor trade — so its absence is
+reported rather than silently skipped. Point at it with `export.epubcheck_path`; a `.jar` is
+run through `java -jar` automatically.
+
+```
+$ folioai export <job_id> --format epub
+wrote ...book.epub
+epub: valid (structural checks)
+epubcheck is not installed, so only the built-in structural checks ran.
+```
+
 ## Try it
 
 The test fixtures are synthetic PDFs that encode the ways real PDFs ruin text — running heads,
@@ -391,8 +445,9 @@ shows up in review as a schema diff.
   classification are unit-tested against a stub transport, not against OpenRouter.
 - **The FastAPI review UI (§17) is not built.** The brief marks it phase 2, after everything
   else works.
-- **PDF output needs Typst or WeasyPrint**, neither of which is installed here, so that path
-  has been exercised only through its failure branch and the generated Typst source.
+- **epubcheck itself has not run here** — no JVM on this machine — so the epubcheck
+  integration is tested against a stubbed process, while the structural checks are tested
+  against genuinely corrupted EPUBs.
 
 ## Design documents
 

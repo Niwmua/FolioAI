@@ -1059,8 +1059,16 @@ def export(
     )
     for path in result.files:
         console().print(f"[good]wrote[/good] {path}")
+    if result.epub_validation is not None:
+        validation = result.epub_validation
+        style = "good" if validation.ok else "bad"
+        console().print(f"[{style}]epub:[/{style}] {validation.summary()}")
+        for problem in validation.warnings[:5]:
+            console().print(f"  [warn]{problem.check}[/warn] {problem.detail}")
     for warning in result.warnings:
         console().print(f"[warn]note:[/warn] {warning}")
+    for note in result.notes:
+        console().print(f"[muted]{note}[/muted]")
     if not result.files:
         console().print("[bad]Nothing was written.[/bad]")
         raise typer.Exit(code=9)

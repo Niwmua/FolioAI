@@ -92,7 +92,7 @@ plugins = []
 [[tool.mypy.overrides]]
 module = [
     "fitz.*", "pymupdf.*", "lingua.*", "slugify.*", "reportlab.*",
-    "ebooklib.*", "weasyprint.*", "docx.*", "marker.*",
+    "ebooklib.*", "weasyprint.*", "docx.*", "marker.*", "tiktoken.*",
 ]
 ignore_missing_imports = true
 

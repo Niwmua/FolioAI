@@ -19,6 +19,7 @@ from .errors import RenderError
 from .ir import Document
 from .logging_setup import get_logger
 from .render.base import Layout, RenderContext
+from .render.epubcheck import ValidationResult
 from .render.markdown import write_markdown
 from .store import JobStore
 
@@ -37,6 +38,9 @@ COLUMN_CAPABLE = frozenset({"pdf", "html"})
 class ExportResult:
     files: list[Path] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
+    #: Informational, not problems: an absent epubcheck belongs here, not in warnings.
+    notes: list[str] = field(default_factory=list)
+    epub_validation: ValidationResult | None = None
 
     def describe(self) -> str:
         return ", ".join(path.name for path in self.files)
@@ -133,16 +137,19 @@ def export_document(
                 result.files.append(render_docx(document, target, context))
             elif fmt == "epub":
                 result.files.append(render_epub(document, target, context, cover=cover))
-                ok, messages = validate_epub(target)
-                if not ok:
-                    result.warnings.append(
-                        f"epubcheck reported {len(messages)} problem(s): {messages[0][:160]}"
-                    )
-                elif messages:
-                    result.warnings.append(messages[0])
+                validation = validate_epub(target, settings)
+                result.epub_validation = validation
+                for problem in validation.errors[:5]:
+                    result.warnings.append(f"epub: {problem.describe()}")
+                if validation.ok:
+                    log.info("epub_valid", path=str(target), summary=validation.summary())
+                for note in validation.notes:
+                    result.notes.append(note)
             elif fmt == "pdf":
                 engine = settings.export.pdf_engine if settings else "auto"
-                result.files.append(render_pdf(document, target, context, engine=engine))
+                result.files.append(
+                    render_pdf(document, target, context, engine=engine, settings=settings)
+                )
         except RenderError as exc:
             log.warning("format_failed", format=fmt, error=exc.message)
             result.warnings.append(f"{fmt}: {exc.format_for_user()}")

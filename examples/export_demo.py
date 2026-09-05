@@ -77,7 +77,12 @@ async def main() -> int:
         return 1
 
     OUT.mkdir(parents=True, exist_ok=True)
-    os.environ["FOLIOAI_HOME"] = str(OUT / "home")
+    # Isolate the job *state* only. Relocating FOLIOAI_HOME would also move the bin and
+    # fonts directories, and the demo would then report that no PDF engine is installed
+    # while one sits in the real one.
+    os.environ["FOLIOAI_JOBS_DIR"] = str(OUT / "jobs")
+    os.environ["FOLIOAI_LOGS_DIR"] = str(OUT / "logs")
+    os.environ["FOLIOAI_STATE_FILE"] = str(OUT / "state.json")
 
     settings = packaged_settings()
     settings.translation.batch_tokens = 400
