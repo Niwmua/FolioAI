@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING
 
 from .ir import Block, Document
 from .logging_setup import get_logger
-from .tags import render_segments
+from .tags import TAG_TOKENS, render_segments, tag_overhead
 from .tokens import count_tokens
 
 if TYPE_CHECKING:
@@ -64,7 +64,19 @@ class Batch:
 
     @property
     def source_tokens(self) -> int:
+        """Prose only. What the *text* of this batch costs."""
         return sum(unit.tokens for unit in self.units)
+
+    @property
+    def wire_tokens(self) -> int:
+        """Prose plus the tag protocol: what actually goes over the wire, each way.
+
+        Batching and the completion budget both have to use this rather than
+        ``source_tokens``. The wrappers are charged twice -- sent in the prompt, echoed in
+        the response -- and they scale with segment count, so a batch of many short blocks
+        costs far more than its word count suggests.
+        """
+        return self.source_tokens + tag_overhead(self.size)
 
     @property
     def size(self) -> int:
@@ -114,12 +126,13 @@ def build_batches(units: Sequence[Unit], settings: Settings) -> list[Batch]:
         Batches in document order. Every unit appears in exactly one batch.
     """
     budget = settings.translation.batch_tokens
+    max_segments = settings.translation.max_batch_segments
     batches: list[Batch] = []
     current: Batch | None = None
 
     for unit in units:
         # Rule 1: an oversized block travels alone rather than being cut in half.
-        if unit.tokens > budget:
+        if unit.tokens + TAG_TOKENS > budget:
             if current is not None and current.units:
                 batches.append(current)
                 current = None
@@ -135,9 +148,17 @@ def build_batches(units: Sequence[Unit], settings: Settings) -> list[Batch]:
             continue
 
         crosses_chapter = current is not None and current.chapter_id != unit.block.chapter_id
-        over_budget = current is not None and current.source_tokens + unit.tokens > budget
+        over_budget = (
+            current is not None and current.wire_tokens + unit.tokens + TAG_TOKENS > budget
+        )
+        # A hard ceiling on segment count as well as tokens. The token budget alone already
+        # implies one (~100 at the shipped defaults), but it moves whenever batch_tokens
+        # does, and a response carrying hundreds of tags has to get every one of them right
+        # or the whole batch retries. Front matter is where this bites: a table of contents
+        # is hundreds of blocks that weigh almost nothing.
+        too_many = current is not None and current.size >= max_segments
 
-        if current is None or crosses_chapter or over_budget:
+        if current is None or crosses_chapter or over_budget or too_many:
             if current is not None and current.units:
                 batches.append(current)
             current = Batch(index=len(batches), chapter_id=unit.block.chapter_id)
@@ -156,6 +177,7 @@ def build_batches(units: Sequence[Unit], settings: Settings) -> list[Batch]:
         batches=len(batches),
         budget_tokens=budget,
         oversized=sum(1 for b in batches if b.oversized),
+        largest_batch=max((b.size for b in batches), default=0),
     )
     return batches
 

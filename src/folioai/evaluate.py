@@ -7,7 +7,10 @@ Three things this module refuses to do, all deliberate:
   at applying a weighting consistently (§10, D-40).
 * **It does not let a good average hide an omission.** Any ``critical`` issue, or
   completeness below the floor, fails the segment whatever the composite says (D-41).
-* **It does not silently accept unparseable output.** One repair retry, then an error.
+* **It does not silently accept unparseable output.** One repair retry; if that fails too,
+  the batch is marked *unjudged* -- every segment fails, keeps its translation and is
+  flagged for review (D-166). What it will not do is quietly treat an unreadable verdict as
+  a passing one.
 """
 
 from __future__ import annotations
@@ -18,7 +21,7 @@ import re
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
 from pydantic import ValidationError as PydanticValidationError
 
 from .errors import EvaluationError
@@ -41,19 +44,60 @@ IssueSeverity = Literal["critical", "major", "minor"]
 
 _JSON_BLOCK_RE = re.compile(r"\{.*\}", re.DOTALL)
 
+#: How much of a quoted excerpt is kept. Long enough to identify the passage, short enough
+#: that the report and the database stay manageable. Over-long quotes are trimmed, never
+#: rejected -- see ``Issue._clip_excerpt``.
+EXCERPT_LIMIT = 400
+
 
 class Issue(BaseModel):
-    """One defect the judge found."""
+    """One defect the judge found.
 
-    model_config = ConfigDict(extra="ignore")
+    ``severity`` is load-bearing -- a ``critical`` issue fails the segment whatever the
+    composite says -- so it stays required. ``dimension`` only labels the issue in the
+    report, so a judge that does not supply one leaves it unset rather than having a
+    plausible value invented for it.
+    """
+
+    model_config = ConfigDict(extra="ignore", populate_by_name=True)
 
     segment_id: str
-    dimension: Dimension
+    dimension: Dimension | None = None
     severity: IssueSeverity
-    source_excerpt: str = Field(default="", max_length=400)
-    translation_excerpt: str | None = Field(default=None, max_length=400)
-    explanation: str = ""
+    source_excerpt: str = Field(default="", max_length=EXCERPT_LIMIT)
+    translation_excerpt: str | None = Field(default=None, max_length=EXCERPT_LIMIT)
+    #: Models reach for "description" about as often as "explanation"; both name the same
+    #: free-text field, and neither is a claim about the translation.
+    explanation: str = Field(
+        default="", validation_alias=AliasChoices("explanation", "description")
+    )
     suggested_fix: str | None = None
+
+    @field_validator("source_excerpt", "explanation", mode="before")
+    @classmethod
+    def _null_means_absent(cls, value: Any) -> Any:
+        """``null`` and ``""`` say the same thing here: the judge quoted nothing.
+
+        An issue reporting an *addition* has no source excerpt by definition, so a judge
+        that sends ``null`` for it is being accurate, not sloppy. Rejecting the batch over
+        it threw away the judge's verdict on twenty other segments.
+        """
+        return "" if value is None else value
+
+    @field_validator("source_excerpt", "translation_excerpt", mode="before")
+    @classmethod
+    def _clip_excerpt(cls, value: Any) -> Any:
+        """Trim an over-long quote rather than rejecting the batch it came in.
+
+        The limit exists so the report stays readable and the database stays small -- a
+        presentation concern. Enforcing it by *refusing* the response let a judge that
+        quoted a whole paragraph throw away its own verdict on twenty other segments, which
+        is a steep price for a long quotation. The excerpt only ever illustrates the issue;
+        the severity and the scores, which are what anything acts on, are untouched.
+        """
+        if isinstance(value, str) and len(value) > EXCERPT_LIMIT:
+            return value[: EXCERPT_LIMIT - 1] + "…"
+        return value
 
 
 class SegmentScore(BaseModel):
@@ -145,7 +189,7 @@ EVALUATION_SCHEMA: dict[str, Any] = {
                             ],
                         },
                         "severity": {"type": "string", "enum": ["critical", "major", "minor"]},
-                        "source_excerpt": {"type": "string"},
+                        "source_excerpt": {"type": ["string", "null"]},
                         "translation_excerpt": {"type": ["string", "null"]},
                         "explanation": {"type": "string"},
                         "suggested_fix": {"type": ["string", "null"]},
@@ -194,6 +238,51 @@ class BatchEvaluation:
         return round(sum(composites) / len(composites), 2) if composites else 0.0
 
 
+def _flatten_grouped_issues(payload: Any) -> Any:
+    """Accept ``issues`` grouped per segment as well as flat.
+
+    Judges mirror the shape of ``scores`` -- one object per segment -- and nest the issues
+    inside it::
+
+        {"segment_id": "b0313", "issues": [{"severity": "minor", "description": "..."}]}
+
+    instead of one flat object per issue. Every field the caller acts on is present in
+    both forms, in the same words, so rewriting one into the other moves information
+    without adding or removing any:
+
+        {"segment_id": "b0313", "severity": "minor", "description": "..."}
+
+    This is normalisation of a *representation*, the same allowance ``strip_code_fences``
+    gets in ``tags.py``, and not the repair of a malformed one. It is deliberately narrow:
+    it fires only on an entry that pairs a ``segment_id`` with a list under ``issues``, and
+    a nested entry that omits its severity still fails validation rather than acquiring a
+    default. Widening it to guess at missing content would defeat the point -- a judge that
+    cannot say how bad something is has not judged it.
+    """
+    if not isinstance(payload, dict):
+        return payload
+    issues = payload.get("issues")
+    if not isinstance(issues, list):
+        return payload
+
+    flattened: list[Any] = []
+    changed = False
+    for entry in issues:
+        nested = entry.get("issues") if isinstance(entry, dict) else None
+        if isinstance(entry, dict) and isinstance(nested, list) and "segment_id" in entry:
+            changed = True
+            shared = {k: v for k, v in entry.items() if k != "issues"}
+            for inner in nested:
+                flattened.append({**shared, **inner} if isinstance(inner, dict) else inner)
+        else:
+            flattened.append(entry)
+
+    if not changed:
+        return payload
+    log.info("evaluation_issues_regrouped", grouped=len(issues), flattened=len(flattened))
+    return {**payload, "issues": flattened}
+
+
 def parse_evaluation(text: str) -> Evaluation:
     """Parse the judge's JSON strictly, tolerating a fence or surrounding prose.
 
@@ -204,30 +293,34 @@ def parse_evaluation(text: str) -> Evaluation:
     if candidate.startswith("```"):
         candidate = re.sub(r"^```[a-zA-Z0-9_-]*\s*|\s*```$", "", candidate, flags=re.DOTALL)
 
-    try:
-        return Evaluation.model_validate_json(candidate)
-    except (PydanticValidationError, ValueError):
-        pass
-
     match = _JSON_BLOCK_RE.search(candidate)
-    if match:
-        try:
-            return Evaluation.model_validate(json.loads(match.group(0)))
-        except (PydanticValidationError, ValueError, json.JSONDecodeError) as exc:
-            raise EvaluationError(
-                "The evaluator returned JSON that does not match the expected schema.",
-                remedy=(
-                    "This usually means the evaluator model ignores structured outputs. Try "
-                    "--evaluator-model with a model that supports JSON mode."
-                ),
-                context={"error": str(exc)[:300], "response_head": candidate[:200]},
-            ) from exc
+    if match is None:
+        raise EvaluationError(
+            "The evaluator returned no JSON at all.",
+            remedy="Try a different --evaluator-model; this one is not following the schema.",
+            context={"response_head": candidate[:200]},
+        )
 
-    raise EvaluationError(
-        "The evaluator returned no JSON at all.",
-        remedy="Try a different --evaluator-model; this one is not following the schema.",
-        context={"response_head": candidate[:200]},
-    )
+    try:
+        payload = json.loads(match.group(0))
+    except json.JSONDecodeError as exc:
+        raise EvaluationError(
+            "The evaluator's response was not valid JSON.",
+            remedy="Try a different --evaluator-model; this one is not following the schema.",
+            context={"parse_error": str(exc)[:300], "response_head": candidate[:200]},
+        ) from exc
+
+    try:
+        return Evaluation.model_validate(_flatten_grouped_issues(payload))
+    except (PydanticValidationError, ValueError) as exc:
+        raise EvaluationError(
+            "The evaluator returned JSON that does not match the expected schema.",
+            remedy=(
+                "This usually means the evaluator model ignores structured outputs. Try "
+                "--evaluator-model with a model that supports JSON mode."
+            ),
+            context={"schema_error": str(exc)[:300], "response_head": candidate[:200]},
+        ) from exc
 
 
 def decide(
@@ -377,8 +470,10 @@ class Evaluator:
     ) -> BatchEvaluation:
         """Judge one translated batch.
 
-        Raises:
-            EvaluationError: if the response cannot be parsed after one repair retry.
+        Never raises for a malformed response: after one repair retry the batch comes back
+        marked ``structured_output="unparsed"`` with no scores, which ``decide`` turns into
+        a failure for every segment (D-166). A judge having a bad minute must not end a
+        translation that is 400 pages in.
         """
         messages = self.build_messages(result, validation)
         response = await self.client.complete(
@@ -413,10 +508,36 @@ class Evaluator:
                 response_format={"type": "json_object"},
                 purpose="evaluate-repair",
             )
-            evaluation = parse_evaluation(retry_response.text)
-            structured = "repair-retry"
+            try:
+                evaluation = parse_evaluation(retry_response.text)
+                structured = "repair-retry"
+            except EvaluationError as second_error:
+                # The judge has now failed twice. Do not take the book down with it (D-166):
+                # this batch is *unjudged*, which the rest of the pipeline already has a
+                # meaning for -- an unjudged segment is an unknown one, so it fails, keeps
+                # its translation and is flagged for review. Nothing is accepted as good
+                # without a verdict, and a systematically broken evaluator still trips the
+                # circuit breaker, which counts exactly these outcomes.
+                log.error(
+                    "evaluation_unparseable",
+                    batch=result.batch.index,
+                    attempt=result.attempt_no,
+                    segments=result.batch.size,
+                    first_error=first_error.message,
+                    second_error=second_error.message,
+                    remedy=(
+                        "these segments keep their translation and are flagged for review; "
+                        "if this repeats, the evaluator model is not following the schema "
+                        "-- try --evaluator-model"
+                    ),
+                )
+                evaluation = Evaluation()
+                structured = "unparsed"
 
         verdicts = decide(evaluation, result.batch.ids, self.settings)
+        if structured == "unparsed":
+            for verdict in verdicts.values():
+                verdict.reason = "the evaluator's response could not be parsed"
         batch_evaluation = BatchEvaluation(
             evaluation=evaluation,
             verdicts=verdicts,

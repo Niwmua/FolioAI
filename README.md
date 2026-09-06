@@ -30,9 +30,15 @@ chapter subsetting.
 
 Not built, deliberately: the FastAPI review UI, which the brief marks as phase 2.
 
-The whole pipeline has been exercised end to end against a fake model — the two demos below
-run it with no API key — but **not yet against a real endpoint or a real book**. That is the
-one thing standing between this and a first real translation.
+The pipeline has now been run end to end against a real endpoint and a real book (*The
+Count of Monte Cristo*, 1,100 pages, into Persian). It is also exercised entirely offline
+against a fake model — the demos below need no API key.
+
+Real books broke three things synthetic ones could not, all of them in token accounting:
+reasoning models spend their completion budget thinking before they write, the `<seg>`
+wrappers cost tokens that nothing was counting, and the circuit breaker judged first
+attempts rather than finished ones and so aborted runs that were about to succeed. See
+[DECISIONS.md](DECISIONS.md) §14-15.
 
 ## Install
 
@@ -290,7 +296,11 @@ What follows is deliberately ordered cheapest-first:
 2. **The judge** (`evaluate.py`) — a second model, on a different vendor by default, scoring
    five dimensions. The composite is computed in Python, never taken from the model. Any
    `critical` issue, or completeness below 70, fails the segment regardless of the total: a
-   weighted average must not be able to hide a lost sentence.
+   weighted average must not be able to hide a lost sentence. If the judge's own response
+   cannot be read — malformed JSON, a shape the schema does not allow — it gets one repair
+   retry and then the batch is marked *unjudged*: every segment fails and is flagged, the
+   translation is kept, and the run carries on. A judge having a bad minute does not end a
+   book that is 400 pages in, and nothing is accepted as good without a verdict.
 3. **The ladder** (`orchestrate.py`) — attempt 1 at 0.2, attempt 2 at 0.3 with the previous
    output and the reviewer's issues attached, attempt 3 on the escalation model at 0.0. After
    that the highest-scoring attempt is kept and flagged `needs_review`. Content is never
@@ -298,8 +308,11 @@ What follows is deliberately ordered cheapest-first:
    the next one's token budget — every other rung addresses a model that answered badly, and
    none of them help one that never got room to answer.
 4. **The circuit breaker** — if a quarter of a chapter's segments *and* at least eight of
-   them fail their first attempt, the run stops. That pattern means the prompt, the model or
-   the extraction is broken, and grinding through 300 more pages of it just burns money.
+   them still need review *after the ladder has finished with them*, the run stops. That
+   pattern means the prompt, the model or the extraction is broken, and grinding through 300
+   more pages of it just burns money. It counts finished segments rather than first attempts
+   on purpose: a batch that failed once and recovered is the ladder working, and counting
+   that as a failure aborts runs that were about to succeed.
 
 Every attempt, score and issue is stored, so a re-run answers "why is this segment bad" from
 the database rather than from a re-run.
@@ -376,7 +389,7 @@ visible translation alone therefore gets spent on reasoning and the reply is cut
 practice after the first block, so a book comes back with translated chapter headings and
 untranslated paragraphs.
 
-`translation.reasoning_headroom_tokens` (default 2000) is reserved on top of the length-based
+`translation.reasoning_headroom_tokens` (default 4000) is reserved on top of the length-based
 budget for exactly this, and any attempt that stops for length doubles the next one's budget.
 Both are free on a model that does not think: `max_tokens` is a ceiling, not a reservation.
 
@@ -389,8 +402,11 @@ warning  reasoning_budget_exhausted  model=... reasoning_tokens=2110 max_tokens=
 ```
 
 ```ini
-FOLIOAI_TRANSLATION__REASONING_HEADROOM_TOKENS=4000
+FOLIOAI_TRANSLATION__REASONING_HEADROOM_TOKENS=8000
 ```
+
+Measured on a real book: translating dense front matter into Persian cost this model 4,419
+reasoning tokens before it wrote a word.
 
 ### Checking what is actually in effect
 
@@ -465,10 +481,12 @@ shows up in review as a schema diff.
 
 ## What is not done
 
-- **No real book has been through this.** Every test runs against synthetic PDFs built by
-  `tests/fixtures/make_pdfs.py` and a fake model. Real PDFs are stranger than synthetic ones.
-- **No real endpoint has been called.** The client, rate limiter, cost accounting and retry
-  classification are unit-tested against a stub transport, not against OpenRouter.
+- **Only the opening chapters of one real book have been through this**, not a whole one.
+  The automated tests still run entirely against synthetic PDFs and a fake model, so every
+  regression a real book taught us is pinned by a test, but the next real book will be
+  stranger again.
+- **Only one real endpoint has been called.** The client, rate limiter and retry
+  classification are unit-tested against a stub transport; OpenRouter itself is untried.
 - **The FastAPI review UI (§17) is not built.** The brief marks it phase 2, after everything
   else works.
 - **epubcheck itself has not run here** — no JVM on this machine — so the epubcheck

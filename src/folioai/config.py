@@ -116,6 +116,15 @@ class LLMConfig(_Model):
 
 class TranslationConfig(_Model):
     batch_tokens: int = Field(default=1200, gt=0)
+    max_batch_segments: int = Field(
+        default=100,
+        gt=0,
+        description=(
+            "Hard ceiling on blocks per call, independent of the token budget. Every one "
+            "comes back as a tag the model has to get exactly right, and a table of "
+            "contents is hundreds of blocks that weigh almost nothing."
+        ),
+    )
     concurrency: int = Field(default=4, gt=0, le=64)
     temperature: float = Field(default=0.2, ge=0.0, le=2.0)
     top_p: float = Field(default=1.0, ge=0.0, le=1.0)
@@ -123,7 +132,7 @@ class TranslationConfig(_Model):
         default=3.0, gt=1.0, description="Completion token budget as a multiple of source tokens."
     )
     reasoning_headroom_tokens: int = Field(
-        default=2000,
+        default=4000,
         ge=0,
         description=(
             "Completion budget reserved for tokens the model spends thinking before it "

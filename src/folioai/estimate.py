@@ -23,6 +23,7 @@ from .ir import Document
 from .llm.pricing import Cost, format_range, format_usd, price_call
 from .logging_setup import get_logger
 from .segment import Batch, batch_statistics, segment_document
+from .tags import tag_overhead
 from .tokens import count_tokens
 
 if TYPE_CHECKING:
@@ -181,9 +182,14 @@ def estimate_document(
         for batch in batches
         for unit in batch.units[: settings.context.previous_target_blocks]
     )
-    translate_prompt = source_tokens + context_tokens + TRANSLATE_OVERHEAD_TOKENS * len(batches)
-    translate_low = int(source_tokens * low_ratio)
-    translate_high = int(source_tokens * high_ratio)
+    # The <seg> wrapper is paid for twice -- sent around every block and echoed around
+    # every translation -- and on a 15,000-block book that is not a rounding error (D-152).
+    tags = tag_overhead(int(stats["units"]))
+    translate_prompt = (
+        source_tokens + tags + context_tokens + TRANSLATE_OVERHEAD_TOKENS * len(batches)
+    )
+    translate_low = int(source_tokens * low_ratio) + tags
+    translate_high = int(source_tokens * high_ratio) + tags
     estimate.phases.append(
         _phase(
             "translation",
@@ -203,7 +209,8 @@ def estimate_document(
         eval_batches = max(1, round(len(batches) * sample))
         # The judge sees source and target side by side, plus the rubric and glossary.
         eval_prompt = int(
-            (source_tokens + translate_high) * sample + EVALUATE_OVERHEAD_TOKENS * eval_batches
+            (source_tokens + tags + translate_high) * sample
+            + EVALUATE_OVERHEAD_TOKENS * eval_batches
         )
         eval_completion = evaluated_segments * EVAL_COMPLETION_TOKENS_PER_SEGMENT
         estimate.phases.append(
@@ -303,11 +310,15 @@ def render_estimate(estimate: Estimate, settings: Settings) -> Table:
         ),
         caption_style="muted",
     )
-    table.add_column("phase", no_wrap=True)
-    table.add_column("model", no_wrap=True, overflow="ellipsis", max_width=20)
+    # The phase and the cost are the two things this table exists to say, so they get fixed
+    # room and the model name -- the one column a reader can still guess at from a prefix --
+    # absorbs the squeeze. Without the floor, a wider token count silently renames the rows
+    # to "translati…" and "evaluatio…".
+    table.add_column("phase", no_wrap=True, min_width=len("translation"))
+    table.add_column("model", no_wrap=True, overflow="ellipsis", max_width=16)
     table.add_column("calls", justify="right", no_wrap=True)
     table.add_column("tokens in/out", justify="right", no_wrap=True)
-    table.add_column("cost", justify="right", no_wrap=True)
+    table.add_column("cost", justify="right", no_wrap=True, min_width=len("$0.0038-0.0052"))
 
     for phase in estimate.phases:
         table.add_row(

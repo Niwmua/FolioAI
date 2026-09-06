@@ -21,7 +21,7 @@ from .llm.client import LLMClient, LLMResponse, Message
 from .logging_setup import get_logger
 from .prompts import SUMMARIZE_SYSTEM, TRANSLATE_RETRY, TRANSLATE_SYSTEM, render
 from .segment import Batch, BatchContext
-from .tags import ParsedSegments, parse_segments
+from .tags import ParsedSegments, parse_segments, tag_overhead
 
 if TYPE_CHECKING:
     from .config import Settings
@@ -166,10 +166,13 @@ class Translator:
     def completion_budget(self, batch: Batch, *, widen: int = 0) -> int:
         """The ``max_tokens`` for one batch.
 
-        Three parts, and the middle one is the reason this is a method rather than a line:
+        Four parts, and only the first is about how long the book is:
 
         * **the translation itself** -- source tokens times ``max_completion_ratio``, which
           brackets how far a language pair can expand;
+        * **the tag protocol** -- the model has to echo a ``<seg>`` wrapper for every block,
+          and that cost scales with segment *count*, not with prose. Leaving it out
+          under-budgets an ordinary batch by ~800 tokens and a table of contents by 2,600;
         * **reasoning headroom** -- a flat allowance for models that think before they
           write. Those tokens are charged against ``max_tokens`` and never appear in the
           response, so a budget sized for the visible answer alone is spent on thinking and
@@ -181,6 +184,7 @@ class Translator:
         """
         cfg = self.settings.translation
         budget = int(batch.source_tokens * cfg.max_completion_ratio) + 512
+        budget += tag_overhead(batch.size)
         budget += cfg.reasoning_headroom_tokens
         # Annotated because int.__pow__ is typed as returning Any (negative exponents give
         # a float), which would leak Any into the return type under strict mode.

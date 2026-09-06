@@ -20,6 +20,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from .chapters import restrict_to_seeded
 from .config import load_profile
 from .errors import BudgetExceeded, FolioError, StoreError
 from .glossary import Glossary
@@ -190,6 +191,13 @@ def reopen_job(job_id: str, settings: Settings) -> JobContext:
         )
 
     document = Document.load(paths["ir"])
+    # The IR on disk is always the whole book, so a resumed job has to be told again what
+    # it was scoped to. Its own segments rows are the record of that (D-170).
+    seeded = {segment.segment_id for segment in store.list_segments(job_id)}
+    if seeded:
+        kept = restrict_to_seeded(document, seeded)
+        log.info("resume_scope", job=job_id, seeded=len(seeded), translatable_blocks=kept)
+
     target_lang = record.target_lang or document.target_lang or "und"
     profile_name = default_profile_name(document.source_lang, target_lang)
     glossary = (

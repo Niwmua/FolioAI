@@ -93,10 +93,23 @@ def test_extra_font_directories_from_config_are_included(
 def test_inline_markup_becomes_typst_markup_not_literal_asterisks() -> None:
     """Escaping the whole string printed the asterisks in the finished book."""
     out = typst_inline("A *word*, **strong**, `code`, and a ref[^1].")
-    assert "_word_" in out  # Typst spells italic with underscores
-    assert "*strong*" in out  # ...and bold with asterisks
+    assert "#emph[word]" in out
+    assert "#strong[strong]" in out
     assert "`code`" in out
     assert "#super[1]" in out
+
+
+def test_emphasis_survives_a_suffix_glued_to_its_closing_marker() -> None:
+    """Typst's ``_italic_`` shorthand only closes at a word boundary.
+
+    Persian hangs the ezafe straight onto the word before it, so `*Monte Cristo*ی` became
+    `_Monte Cristo_ی` — an unclosed delimiter that failed the compile of a 1,000-page book
+    after every page of it had been paid for. English does it too, with `*Hamlet*'s`.
+    """
+    for glued in ("*مونت*ی", "*Hamlet*'s", "*word*s"):
+        out = typst_inline(glued)
+        assert "#emph[" in out
+        assert "_" not in out, f"the shorthand delimiter must not appear for {glued!r}"
 
 
 def test_prose_that_looks_like_syntax_is_escaped() -> None:

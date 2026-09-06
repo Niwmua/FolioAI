@@ -12,7 +12,7 @@ from typing import Any
 import pytest
 
 from folioai.config import Settings
-from folioai.errors import BudgetExceeded
+from folioai.errors import BudgetExceeded, EvaluationError
 from folioai.evaluate import decide, parse_evaluation
 from folioai.glossary import Glossary, Term
 from folioai.ir import Document
@@ -25,7 +25,7 @@ from folioai.llm.fake import (
 from folioai.orchestrate import CircuitBreakerTripped, Orchestrator, seed_segments
 from folioai.segment import segment_document
 from folioai.store import JobStore
-from folioai.tags import parse_segments
+from folioai.tags import TAG_TOKENS, parse_segments
 from folioai.translate import Translator
 
 PASS_SCORES = {
@@ -344,7 +344,7 @@ async def test_work_completed_before_the_breaker_trips_is_committed(
     finish its ladder and commit before the second batch pushes the count over the line.
     """
     settings.retry.breaker_min_failures = 4
-    settings.translation.batch_tokens = 60
+    settings.translation.batch_tokens = 100  # 3 units, once each carries its tag overhead
     settings.translation.concurrency = 1
     client = FakeLLMClient(judge(failing={f"b{i:04d}" for i in range(12)}))
     orchestrator = build(job_store, tiny_doc, settings, client)
@@ -361,9 +361,13 @@ async def test_work_completed_before_the_breaker_trips_is_committed(
 async def test_a_trip_on_the_first_batch_leaves_everything_resumable(
     tiny_doc: Document, settings: Settings, job_store: JobStore
 ) -> None:
-    """The breaker is allowed to fire before anything commits; nothing may be lost."""
+    """The breaker is allowed to fire before anything commits; nothing may be lost.
+
+    A resume after the breaker fires is the whole point of stopping: the user raises a
+    setting and runs again, so the batch that provoked the trip has to still be pending.
+    """
     settings.retry.breaker_min_failures = 3
-    settings.translation.batch_tokens = 60
+    settings.translation.batch_tokens = 100  # first batch is 3 units, enough to trip alone
     settings.translation.concurrency = 1
     client = FakeLLMClient(judge(failing={f"b{i:04d}" for i in range(12)}))
     with pytest.raises(CircuitBreakerTripped):
@@ -645,3 +649,389 @@ async def test_a_segment_lost_to_truncation_says_so(
     lost = orchestrator.outcomes["b0001"]
     assert lost.text == sources["b0001"], "the source is kept so the export has no gap"
     assert "stopped for length" in lost.reason
+
+
+# -- the tag protocol's own cost, and what it does to batching ---------------------------
+#
+# Every block is wrapped in <seg id="...">...</seg>, in the prompt and again in the reply.
+# That cost scales with segment *count*, not prose, so a chapter of one-line contents
+# entries -- 237 blocks weighing 844 tokens -- carried 2,607 tokens of markup that neither
+# the batch budget nor the completion budget counted.
+
+
+def _toc_doc(entries: int = 240) -> Document:
+    """A contents page: many blocks, almost no words in any of them."""
+    from folioai.ir import Block, Chapter, ExtractionReport
+
+    blocks = [
+        Block(id=f"b{i:04d}", kind="paragraph", text=f"{i} The Chapter Title", chapter_id="ch01")
+        for i in range(entries)
+    ]
+    return Document(
+        source_lang="en",
+        target_lang="fa",
+        title="Contents",
+        chapters=[Chapter(id="ch01", title="Contents", number=1, block_ids=[b.id for b in blocks])],
+        blocks=blocks,
+        extraction_report=ExtractionReport(extractor="test"),
+    )
+
+
+def test_a_contents_page_is_not_sent_as_one_enormous_batch(settings: Settings) -> None:
+    doc = _toc_doc()
+    batches = segment_document(doc, settings)
+
+    assert max(b.size for b in batches) <= settings.translation.max_batch_segments
+    assert sum(b.size for b in batches) == 240, "every block still travels exactly once"
+
+
+def test_the_segment_cap_binds_even_when_the_token_budget_would_not(
+    settings: Settings,
+) -> None:
+    """Blocks this short would otherwise pack by the hundred into one call."""
+    settings.translation.max_batch_segments = 25
+    batches = segment_document(_toc_doc(), settings)
+
+    assert max(b.size for b in batches) == 25
+
+
+def test_batching_charges_each_block_for_its_wrapper(settings: Settings) -> None:
+    """Counting prose alone is what let 237 segments through a 1,200-token budget."""
+    batches = segment_document(_toc_doc(), settings)
+
+    for batch in batches:
+        assert batch.wire_tokens > batch.source_tokens
+        assert batch.wire_tokens <= settings.translation.batch_tokens
+
+
+def test_the_completion_budget_pays_for_the_tags_it_asks_for(
+    tiny_doc: Document, settings: Settings
+) -> None:
+    translator = Translator(FakeLLMClient(), settings, document=tiny_doc, target_lang="de")
+    batch = next(iter(segment_document(tiny_doc, settings)))
+
+    budget = translator.completion_budget(batch)
+    without_tags = (
+        int(batch.source_tokens * settings.translation.max_completion_ratio)
+        + 512
+        + settings.translation.reasoning_headroom_tokens
+    )
+    assert budget == without_tags + TAG_TOKENS * batch.size
+
+
+# -- what the circuit breaker is allowed to count ----------------------------------------
+
+
+async def test_a_batch_that_recovers_on_retry_does_not_trip_the_breaker(
+    tiny_doc: Document, settings: Settings, job_store: JobStore
+) -> None:
+    """The bug that stopped a real book: 16 of 16 truncated on attempt 1, breaker fired,
+    and the widening that would have fixed attempt 2 never got to run."""
+    settings.retry.breaker_min_failures = 2
+    settings.translation.reasoning_headroom_tokens = 0
+    budget = _budget_for_first_batch(tiny_doc, settings)
+
+    client = FakeLLMClient(judge(), reasoning_tokens=budget - 20)
+    orchestrator = build(job_store, tiny_doc, settings, client)
+    await orchestrator.run()  # must not raise
+
+    assert all(o.text.startswith("ZIEL") for o in orchestrator.outcomes.values())
+    assert orchestrator.stats.retries > 0, "attempt 1 must really have failed"
+
+
+async def test_the_breaker_still_trips_when_the_ladder_cannot_recover(
+    tiny_doc: Document, settings: Settings, job_store: JobStore
+) -> None:
+    """Judging final outcomes must not turn the breaker off."""
+    settings.retry.breaker_min_failures = 3
+    settings.translation.batch_tokens = 100
+    settings.translation.concurrency = 1
+    client = FakeLLMClient(judge(failing={f"b{i:04d}" for i in range(12)}))
+
+    with pytest.raises(CircuitBreakerTripped):
+        await build(job_store, tiny_doc, settings, client).run()
+
+
+# -- what the judge is allowed to send -------------------------------------------------
+#
+# A real evaluator returned its issues grouped by segment, mirroring the shape of "scores",
+# and the run died mid-book. The severities were all there, one level down; the repair retry
+# produced the identical shape, so retrying harder was never going to help.
+
+
+GROUPED_ISSUES = json.dumps(
+    {
+        "scores": [
+            {
+                "segment_id": "b0313",
+                "completeness": 100,
+                "accuracy": 95,
+                "terminology": 100,
+                "fluency": 100,
+                "formatting": 100,
+            }
+        ],
+        "issues": [
+            {
+                "segment_id": "b0313",
+                "issues": [
+                    {"severity": "minor", "description": "Omission of 'handsomely'."},
+                    {"severity": "major", "description": "Addition not in source."},
+                ],
+            }
+        ],
+    }
+)
+
+
+def test_issues_grouped_by_segment_are_flattened() -> None:
+    evaluation = parse_evaluation(GROUPED_ISSUES)
+
+    assert [i.segment_id for i in evaluation.issues] == ["b0313", "b0313"]
+    assert [i.severity for i in evaluation.issues] == ["minor", "major"]
+    assert evaluation.issues[0].explanation == "Omission of 'handsomely'."
+
+
+def test_a_grouped_critical_issue_still_fails_its_segment(settings: Settings) -> None:
+    """The point of accepting the shape: severity survives instead of the run dying."""
+    payload = json.dumps(
+        {
+            "scores": [
+                {
+                    "segment_id": "b0001",
+                    "completeness": 100,
+                    "accuracy": 100,
+                    "terminology": 100,
+                    "fluency": 100,
+                    "formatting": 100,
+                }
+            ],
+            "issues": [
+                {
+                    "segment_id": "b0001",
+                    "issues": [{"severity": "critical", "description": "a clause was dropped"}],
+                }
+            ],
+        }
+    )
+    verdicts = decide(parse_evaluation(payload), ["b0001"], settings)
+
+    assert not verdicts["b0001"].passed
+    assert verdicts["b0001"].reason == "a critical issue was reported"
+
+
+def test_a_flat_issue_list_is_left_alone() -> None:
+    evaluation = parse_evaluation(
+        json.dumps(
+            {
+                "scores": [],
+                "issues": [
+                    {
+                        "segment_id": "b0001",
+                        "dimension": "accuracy",
+                        "severity": "major",
+                        "explanation": "wrong tense",
+                    }
+                ],
+            }
+        )
+    )
+
+    assert evaluation.issues[0].dimension == "accuracy"
+    assert evaluation.issues[0].explanation == "wrong tense"
+
+
+def test_a_nested_issue_without_a_severity_is_still_rejected() -> None:
+    """Flattening moves information; it must never invent any. A judge that cannot say how
+    bad something is has not judged it, and no default may stand in for that."""
+    payload = json.dumps(
+        {
+            "scores": [],
+            "issues": [{"segment_id": "b0001", "issues": [{"description": "something is off"}]}],
+        }
+    )
+
+    with pytest.raises(EvaluationError):
+        parse_evaluation(payload)
+
+
+def test_an_unlabelled_dimension_is_left_unset_not_guessed() -> None:
+    evaluation = parse_evaluation(GROUPED_ISSUES)
+
+    assert all(issue.dimension is None for issue in evaluation.issues)
+
+
+def test_a_response_with_no_json_says_so() -> None:
+    with pytest.raises(EvaluationError, match="no JSON"):
+        parse_evaluation("I'm afraid I can't help with that.")
+
+
+# -- reporting an error must not itself raise --------------------------------------------
+
+
+def test_an_error_context_may_shadow_the_log_fields() -> None:
+    """`context={"error": ...}` used to raise TypeError inside the error handler, so the
+    user saw a traceback about duplicate kwargs instead of the message and the remedy."""
+    from folioai.cli import _log_fields
+
+    exc = EvaluationError(
+        "bad JSON",
+        remedy="try another model",
+        context={"error": "the underlying detail", "message": "shadowed", "batch": 3},
+    )
+    fields = _log_fields(exc)
+
+    assert fields["error"] == "EvaluationError"
+    assert fields["message"] == "bad JSON"
+    assert fields["context_error"] == "the underlying detail"
+    assert fields["context_message"] == "shadowed"
+    assert fields["batch"] == 3
+
+
+def test_a_null_source_excerpt_is_accepted() -> None:
+    """An issue reporting an *addition* has no source excerpt; null says so honestly."""
+    evaluation = parse_evaluation(
+        json.dumps(
+            {
+                "scores": [],
+                "issues": [
+                    {
+                        "segment_id": "b0268",
+                        "dimension": "accuracy",
+                        "severity": "minor",
+                        "source_excerpt": None,
+                        "explanation": "an extra clause",
+                    }
+                ],
+            }
+        )
+    )
+
+    assert evaluation.issues[0].source_excerpt == ""
+
+
+# -- a judge having a bad minute must not end the book ------------------------------------
+
+
+def _unreadable_judge() -> Any:
+    """Translates fine; returns JSON the evaluator schema will never accept."""
+
+    def handler(messages: list[Message], model: str) -> str:
+        user = next(m["content"] for m in messages if m["role"] == "user")
+        if "SOURCE:" not in user and "could not be parsed" not in user:
+            parsed = parse_segments(user)
+            return "\n".join(
+                f'<seg id="{sid}">ZIEL {text}</seg>' for sid, text in parsed.texts.items()
+            )
+        return '{"scores": [{"segment_id": "b0000"}], "issues": []}'
+
+    return handler
+
+
+async def test_an_unreadable_judge_flags_the_batch_instead_of_ending_the_run(
+    tiny_doc: Document, settings: Settings, job_store: JobStore
+) -> None:
+    """A run 400 pages in must not be ended by an annotation the judge mangled."""
+    orchestrator = build(job_store, tiny_doc, settings, FakeLLMClient(_unreadable_judge()))
+    await orchestrator.run()  # must not raise
+
+    outcomes = orchestrator.outcomes
+    assert set(outcomes) == {b.id for b in tiny_doc.translatable_blocks()}
+    assert all(o.text.startswith("ZIEL") for o in outcomes.values()), "translations are kept"
+    assert all(o.needs_review for o in outcomes.values()), "and none is accepted as good"
+    assert all(
+        o.reason == "the evaluator's response could not be parsed" for o in outcomes.values()
+    )
+
+
+async def test_an_unreadable_judge_does_not_burn_the_retry_ladder(
+    tiny_doc: Document, settings: Settings, job_store: JobStore
+) -> None:
+    """Re-translating buys nothing when nobody has said anything against the text."""
+    client = FakeLLMClient(_unreadable_judge())
+    orchestrator = build(job_store, tiny_doc, settings, client)
+    await orchestrator.run()
+
+    batches = len({tuple(c.segment_ids) for c in client.calls_for("translate") if c.segment_ids})
+    assert len(client.calls_for("translate")) == batches, "one translate call per batch, no retries"
+    assert orchestrator.stats.retries == 0
+
+
+async def test_a_systematically_unreadable_judge_still_trips_the_breaker(
+    tiny_doc: Document, settings: Settings, job_store: JobStore
+) -> None:
+    """Continuing past one bad verdict must not mean translating a whole book unjudged."""
+    settings.retry.breaker_min_failures = 3
+    settings.translation.batch_tokens = 100
+    settings.translation.concurrency = 1
+
+    with pytest.raises(CircuitBreakerTripped):
+        await build(job_store, tiny_doc, settings, FakeLLMClient(_unreadable_judge())).run()
+
+
+# -- what a resume is scoped to ------------------------------------------------------------
+
+
+def test_a_resume_is_scoped_to_the_chapters_the_job_seeded(tiny_doc: Document) -> None:
+    """`--chapters` never reaches the IR on disk, by design, so a resume has to recover it.
+
+    Without this, resuming a five-chapter run of a 468,000-word novel silently starts
+    translating all 121 chapters — an unasked-for bill an order of magnitude larger than
+    the run the user actually started.
+    """
+    from folioai.chapters import apply_selection, parse_selection, restrict_to_seeded
+
+    subset = tiny_doc.model_copy(deep=True)
+    apply_selection(subset, parse_selection("1"))
+    seeded = {block.id for block in subset.translatable_blocks()}
+    assert 0 < len(seeded) < len(tiny_doc.translatable_blocks()), "chapter 1 is a real subset"
+
+    # The IR on disk is always the whole book; this is what `resume` reloads.
+    reloaded = tiny_doc.model_copy(deep=True)
+    assert len(reloaded.translatable_blocks()) > len(seeded)
+
+    kept = restrict_to_seeded(reloaded, seeded)
+
+    assert kept == len(seeded)
+    assert {b.id for b in reloaded.translatable_blocks()} == seeded
+
+
+def test_restricting_never_turns_an_untranslatable_block_back_on(tiny_doc: Document) -> None:
+    from folioai.chapters import restrict_to_seeded
+
+    doc = tiny_doc.model_copy(deep=True)
+    doc.blocks[1].translate = False  # untranslatable for its own reasons
+    every_id = {block.id for block in doc.blocks}
+
+    restrict_to_seeded(doc, every_id)
+
+    assert doc.blocks[1].translate is False
+
+
+def test_an_over_long_excerpt_is_trimmed_not_rejected() -> None:
+    """A verbose quotation must not cost the judge its verdict on the whole batch."""
+    from folioai.evaluate import EXCERPT_LIMIT
+
+    evaluation = parse_evaluation(
+        json.dumps(
+            {
+                "scores": [],
+                "issues": [
+                    {
+                        "segment_id": "b0001",
+                        "severity": "minor",
+                        "source_excerpt": "x" * (EXCERPT_LIMIT + 500),
+                        "translation_excerpt": "y" * (EXCERPT_LIMIT + 500),
+                        "explanation": "quoted the whole paragraph",
+                    }
+                ],
+            }
+        )
+    )
+
+    issue = evaluation.issues[0]
+    assert len(issue.source_excerpt) == EXCERPT_LIMIT
+    assert issue.source_excerpt.endswith("…")
+    assert issue.translation_excerpt is not None
+    assert len(issue.translation_excerpt) == EXCERPT_LIMIT
+    assert issue.severity == "minor", "the part anything acts on is untouched"

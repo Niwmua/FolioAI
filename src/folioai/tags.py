@@ -22,12 +22,28 @@ from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 
 __all__ = [
+    "TAG_TOKENS",
     "ParsedSegments",
     "extract_segment_ids",
     "parse_segments",
     "render_segments",
     "strip_code_fences",
+    "tag_overhead",
 ]
+
+#: Token cost of one ``<seg id="...."></seg>`` wrapper, measured at 10-11.2 across a real
+#: book and rounded up. Small per segment and easy to forget, which is exactly the problem:
+#: it is charged twice -- once in the prompt and again in the response, because the model
+#: has to reproduce every wrapper -- and it scales with segment *count*, not with prose. A
+#: chapter of 237 one-line contents entries carries 2,607 tokens of markup around 844 tokens
+#: of text, so a budget that counts only the text is wrong by 300%.
+TAG_TOKENS = 12
+
+
+def tag_overhead(segments: int) -> int:
+    """Token cost of wrapping ``segments`` blocks in the tag protocol."""
+    return segments * TAG_TOKENS
+
 
 # The body may not contain another "<seg" opening. Without that guard, an unclosed tag
 # swallows everything up to the *next* segment's closing tag: the dropped segment is still

@@ -142,3 +142,31 @@ def selection_summary(document: Document, selection: ChapterSelection) -> str:
         block.word_count for block in document.blocks if block.chapter_id in {c.id for c in chosen}
     )
     return f"{len(chosen)} of {total} chapters ({selection.describe()}), about {words:,} words"
+
+
+def restrict_to_seeded(document: Document, seeded: set[str]) -> int:
+    """Narrow a freshly loaded IR to the blocks a job actually seeded, in place.
+
+    ``--chapters`` is applied to the in-memory document and never written to the IR, which
+    is deliberate: the IR on disk stays complete so the selection can be widened later
+    without re-extracting or renumbering anything. The cost is that a ``resume`` reloading
+    that IR has no idea a subset was asked for, and would translate the whole book -- on a
+    468,000-word novel, an unasked-for bill an order of magnitude larger than the run the
+    user started.
+
+    The ``segments`` table already records the answer, because ``seed_segments`` wrote one
+    row per *selected* block and nothing else. Reconstructing the scope from it needs no
+    new column, no second copy of the selection to drift out of step, and no migration.
+
+    Returns:
+        The number of blocks left translatable.
+    """
+    kept = 0
+    for block in document.blocks:
+        # Never flip a block *on*: an untranslatable kind stays untranslatable (see
+        # apply_selection).
+        if block.id not in seeded:
+            block.translate = False
+        elif block.translate:
+            kept += 1
+    return kept

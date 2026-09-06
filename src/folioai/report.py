@@ -344,9 +344,11 @@ def _flagged_html(entry: dict[str, Any]) -> str:
             parts.append(f'<div class="muted">{html.escape(attempt["text"][:600])}</div>')
         for issue in attempt["issues"]:
             parts.append(
-                f'<div class="issue"><span class="sev">{html.escape(issue.get("severity", ""))}'
-                f"</span> {html.escape(issue.get('dimension', ''))} — "
-                f"{html.escape(issue.get('explanation', ''))}</div>"
+                # `or ""` rather than a .get default: these keys exist and can be null --
+                # a judge may decline to name a dimension -- and html.escape(None) raises.
+                f'<div class="issue"><span class="sev">{html.escape(issue.get("severity") or "")}'
+                f"</span> {html.escape(issue.get('dimension') or '')} — "
+                f"{html.escape(issue.get('explanation') or '')}</div>"
             )
         parts.append("</div>")
     parts.append("</div></details>")

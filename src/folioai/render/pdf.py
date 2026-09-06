@@ -127,16 +127,22 @@ def typst_inline(text: str) -> str:
     outside a recognised marker is still escaped, because prose that came out of a PDF and
     through a language model must never be able to become syntax.
 
-    Typst spells these differently from Markdown: ``*bold*`` and ``_italic_``.
+    Emphasis is emitted as ``#emph[...]`` and ``#strong[...]``, not as Typst's shorthand
+    ``_italic_`` and ``*bold*``. The shorthand only closes at a word boundary, and Persian
+    hangs the ezafe straight onto the word it follows -- ``*Monte Cristo*ی`` becomes
+    ``_Monte Cristo_ی``, whose closing delimiter Typst does not see, and the compile fails
+    with "unclosed delimiter" a thousand pages later. English does the same with
+    ``*Hamlet*'s``; Persian just makes it constant, 46 times in five chapters. The function
+    form has no adjacency rule to trip over in any script.
     """
     parts: list[str] = []
     cursor = 0
     for match in _INLINE_RE.finditer(text):
         parts.append(_escape_typst(text[cursor : match.start()]))
         if inner := match.group("strong"):
-            parts.append(f"*{_escape_typst(inner[2:-2])}*")
+            parts.append(f"#strong[{_escape_typst(inner[2:-2])}]")
         elif inner := match.group("em"):
-            parts.append(f"_{_escape_typst(inner[1:-1])}_")
+            parts.append(f"#emph[{_escape_typst(inner[1:-1])}]")
         elif inner := match.group("code"):
             parts.append(f"`{inner[1:-1]}`")
         elif inner := match.group("footnote"):

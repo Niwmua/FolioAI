@@ -73,6 +73,10 @@ class Attempt:
     #: The check *names* behind ``validation``, whose entries are human-readable prose.
     #: Deciding what to do about a failure means matching on the check, not on its wording.
     checks: list[str] = field(default_factory=list)
+    #: The judge could not be read, so this attempt has no verdict either way (D-166).
+    #: It still fails -- an unjudged segment is an unknown one -- but re-translating it
+    #: would spend the ladder on a text nobody has said anything against.
+    unjudged: bool = False
     attempt_row_id: int | None = None
 
     @property
@@ -131,6 +135,12 @@ class CircuitBreaker:
 
     Requires both a failure *rate* over the threshold and a minimum absolute count, so a
     short chapter with two bad segments does not halt a 400-page run.
+
+    Fed from *finished* segments, not first attempts (D-150). The distinction is the whole
+    difference between "this chapter cannot be translated" and "the ladder had to work for
+    it": counting a recovered first attempt as a failure trips the breaker on runs that
+    would have completed, and the message it prints then blames the prompt, the model or
+    the extraction, all three of which were fine.
     """
 
     def __init__(self, settings: Settings) -> None:
@@ -155,11 +165,14 @@ class CircuitBreaker:
             return
         raise CircuitBreakerTripped(
             f"Chapter {key or '(unnamed)'} is failing systematically: {failures} of "
-            f"{attempts} segments failed on their first attempt.",
+            f"{attempts} segments still needed review after every retry.",
             remedy=(
                 "That pattern means the prompt, the model or the extraction is broken, not "
                 "that the book is hard. Check 'folioai extract' output for this chapter, "
-                "try a different --translator-model, then resume the job."
+                "and read the job log for the reason each segment failed -- repeated "
+                "'truncation' means the model ran out of room, so raise "
+                "translation.reasoning_headroom_tokens rather than changing model. "
+                "Then resume the job."
             ),
             context={"chapter": key, "failed": failures, "attempted": attempts},
         )
@@ -329,13 +342,14 @@ class Orchestrator:
 
             self._record_attempt(batch, result, validation, evaluation, attempts_by_segment)
 
-            if attempt_no == 1:
-                for segment_id in batch.ids:
-                    failed = not attempts_by_segment[segment_id][-1].passed
-                    self.breaker.record(batch.chapter_id, failed=failed)
-                self.breaker.check(batch.chapter_id)
-
-            pending_ids = [sid for sid in batch.ids if not attempts_by_segment[sid][-1].passed]
+            # An unjudged attempt is excluded: it failed, but not for anything the
+            # translation did, so another lap of the ladder would buy nothing (D-166).
+            pending_ids = [
+                sid
+                for sid in batch.ids
+                if not attempts_by_segment[sid][-1].passed
+                and not attempts_by_segment[sid][-1].unjudged
+            ]
             if not pending_ids:
                 break
             if attempt_no == max_attempts:
@@ -411,6 +425,7 @@ class Orchestrator:
                     verdict=verdict,
                     validation=segment_findings,
                     checks=segment_checks,
+                    unjudged=evaluation is not None and evaluation.structured_output == "unparsed",
                     attempt_row_id=row_id,
                 )
             )
@@ -429,10 +444,27 @@ class Orchestrator:
     async def _finish_batch(
         self, batch: Batch, attempts_by_segment: dict[str, list[Attempt]]
     ) -> None:
-        """Keep the best attempt for every segment and commit it (§11)."""
-        for segment_id in batch.ids:
-            attempts = attempts_by_segment[segment_id]
-            outcome = self._best_outcome(segment_id, attempts, batch)
+        """Keep the best attempt for every segment and commit it (§11).
+
+        The circuit breaker is fed from here -- from what the ladder *finished* with, not
+        from attempt 1 (D-150). A first attempt that failed and then recovered is the ladder
+        working, not a chapter failing systematically, and counting it as a failure aborts
+        runs that were about to succeed.
+
+        Order matters: outcomes are decided, the breaker is fed and checked, and only then
+        is anything written. A trip therefore leaves this batch *pending* rather than
+        committed as reviewable, so the resume that follows a fixed setting actually
+        re-translates the segments that provoked the trip.
+        """
+        outcomes = {
+            segment_id: self._best_outcome(segment_id, attempts_by_segment[segment_id], batch)
+            for segment_id in batch.ids
+        }
+        for outcome in outcomes.values():
+            self.breaker.record(batch.chapter_id, failed=outcome.needs_review)
+        self.breaker.check(batch.chapter_id)
+
+        for segment_id, outcome in outcomes.items():
             self.outcomes[segment_id] = outcome
             self.translations[segment_id] = outcome.text
 

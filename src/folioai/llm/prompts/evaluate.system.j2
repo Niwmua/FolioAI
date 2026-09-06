@@ -57,3 +57,8 @@ segment is bad: do not lower a score because a check fired.
 Return JSON matching the provided schema. Report one entry in "scores" for every segment id
 you were given. Do not compute an overall score; report the five dimensions and let the
 caller weight them.
+
+"issues" is a FLAT list, unlike "scores". One object per issue, each carrying its own
+"segment_id", "dimension" and "severity" — do not group several issues under one segment,
+and do not nest an "issues" array inside an entry. Two problems in segment b0142 are two
+objects, both with "segment_id": "b0142". Report an empty list if you found none.

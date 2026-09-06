@@ -51,6 +51,25 @@ RIGHTS_NOTICE = (
 )
 
 
+#: Keys the error log line owns. ``event`` belongs to structlog, which takes it positionally.
+_RESERVED_LOG_KEYS = frozenset({"event", "error", "message"})
+
+
+def _log_fields(exc: FolioError) -> dict[str, Any]:
+    """Flatten an error into log fields, with the error's own context kept clear of them.
+
+    An error's ``context`` is free-form, so it can and does contain a key called ``error``.
+    Splatting it alongside ``error=...`` raises TypeError *inside the error handler*, and
+    the user gets a Python traceback about duplicate keyword arguments instead of the
+    message and remedy the handler exists to print. Colliding keys are prefixed rather than
+    dropped: the context is usually the most diagnostic part of the line.
+    """
+    fields: dict[str, Any] = {"error": type(exc).__name__, "message": exc.message}
+    for key, value in exc.context.items():
+        fields[f"context_{key}" if key in _RESERVED_LOG_KEYS else key] = value
+    return fields
+
+
 def handle_errors(func: F) -> F:
     """Turn a ``FolioError`` into a clean message and exit code instead of a traceback."""
 
@@ -59,9 +78,7 @@ def handle_errors(func: F) -> F:
         try:
             return func(*args, **kwargs)
         except FolioError as exc:
-            get_logger().error(
-                "command_failed", error=type(exc).__name__, message=exc.message, **exc.context
-            )
+            get_logger().error("command_failed", **_log_fields(exc))
             err_console().print(f"[bad]error:[/bad] {exc.format_for_user()}")
             if _STATE["verbosity"] >= 2 and exc.context:
                 err_console().print(f"[muted]{json.dumps(exc.context, default=str)}[/muted]")

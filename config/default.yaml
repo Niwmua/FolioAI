@@ -50,6 +50,10 @@ llm:
 
 translation:
   batch_tokens: 1200
+  # Blocks per call, independent of the token budget above. Every block comes back wrapped
+  # in a <seg> tag the model has to reproduce exactly; a table of contents is hundreds of
+  # blocks that weigh almost nothing, and one 237-way response is a batch that fails whole.
+  max_batch_segments: 100
   concurrency: 4
   temperature: 0.2
   top_p: 1.0
@@ -60,7 +64,7 @@ translation:
   # mid-sentence -- usually after the first segment, which is why only chapter headings
   # come back translated. Costs nothing on a non-reasoning model: max_tokens is a ceiling,
   # not a reservation, and unused budget is refunded to the rate limiter.
-  reasoning_headroom_tokens: 2000
+  reasoning_headroom_tokens: 4000
 
 context:
   previous_target_blocks: 2
